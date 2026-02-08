@@ -1,0 +1,15 @@
+{
+  "name": "code-reviewer",
+  "version": "1.0.0",
+  "description": "AI-powered project evaluation system with multi-role perspectives",
+  "private": true,
+  "scripts": {
+    "dev:server": "cd server && npm run dev",
+    "dev:web": "cd web && npm run dev",
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:web\"",
+    "build": "cd server && npm run build && cd ../web && npm run build"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
