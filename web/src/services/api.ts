@@ -2,7 +2,7 @@ import axios from 'axios';
 
 const api = axios.create({
   baseURL: '/api',
-  timeout: 120000,
+  timeout: 300000, // 5 min for deep evaluations
 });
 
 export interface EvaluationRequest {
@@ -10,6 +10,7 @@ export interface EvaluationRequest {
   projectName: string;
   roles: string[];
   context: string;
+  depth: string;
 }
 
 export interface EvaluationRecord {

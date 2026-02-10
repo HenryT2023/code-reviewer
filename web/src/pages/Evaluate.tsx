@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { Card, Form, Input, Button, Checkbox, message, Steps, Result } from 'antd';
+import { Card, Form, Input, Button, Checkbox, message, Steps, Result, Radio, Tooltip } from 'antd';
 import { useNavigate } from 'react-router-dom';
-import { FolderOpenOutlined, RocketOutlined } from '@ant-design/icons';
+import { FolderOpenOutlined, RocketOutlined, ThunderboltOutlined, SearchOutlined } from '@ant-design/icons';
 import { evaluationApi } from '../services/api';
 
 const { TextArea } = Input;
@@ -17,6 +17,7 @@ const Evaluate = () => {
     { label: '👔 老板视角 (战略决策)', value: 'boss' },
     { label: '🏪 商户视角 (B2B客户)', value: 'merchant' },
     { label: '⚙️ 运营视角 (日常管理)', value: 'operator' },
+    { label: '🏗️ 架构师视角 (技术深度)', value: 'architect' },
   ];
 
   const handleSubmit = async (values: {
@@ -24,6 +25,7 @@ const Evaluate = () => {
     projectName: string;
     roles: string[];
     context: string;
+    depth: string;
   }) => {
     setLoading(true);
     setCurrentStep(1);
@@ -34,13 +36,13 @@ const Evaluate = () => {
         projectName: values.projectName,
         roles: values.roles || ['boss', 'merchant', 'operator'],
         context: values.context || '',
+        depth: values.depth || 'quick',
       });
 
       setEvaluationId(res.data.id);
       message.success('评测已启动');
       setCurrentStep(2);
 
-      // Poll for completion
       pollStatus(res.data.id);
     } catch (error) {
       message.error('启动评测失败');
@@ -89,10 +91,11 @@ const Evaluate = () => {
             layout="vertical"
             onFinish={handleSubmit}
             initialValues={{
-              roles: ['boss', 'merchant', 'operator'],
-              projectPath: '/Users/hal/Fuqiang-SupplyChain',
-              projectName: '富强供应链',
-              context: '香港 B2B 净菜配送平台，面向中小餐厅提供预付制下单、配送管理服务',
+              roles: ['boss', 'merchant', 'operator', 'architect'],
+              projectPath: '/Users/hal/DDT-Monodt',
+              projectName: 'DDT-Monodt',
+              context: 'DDT+ 数字孪生仓库管理操作系统（Monorepo），包含 WMS 后端(Python FastAPI)、WMS 前端(React)、ControlPlane 智能体操作系统、TradeOS 合规接口等子服务。面向香港分销行业，提供事件驱动的仓库管理和AI辅助运营。',
+              depth: 'deep',
             }}
           >
             <Form.Item
@@ -112,7 +115,7 @@ const Evaluate = () => {
               label="项目名称"
               rules={[{ required: true, message: '请输入项目名称' }]}
             >
-              <Input placeholder="例如：富强供应链" size="large" />
+              <Input placeholder="例如：DDT-Monodt" size="large" />
             </Form.Item>
 
             <Form.Item
@@ -122,8 +125,29 @@ const Evaluate = () => {
             >
               <TextArea
                 rows={3}
-                placeholder="例如：香港 B2B 净菜配送平台，面向中小餐厅..."
+                placeholder="例如：DDT+ 数字孪生仓库管理操作系统..."
               />
+            </Form.Item>
+
+            <Form.Item
+              name="depth"
+              label={
+                <span>
+                  评测深度&nbsp;
+                  <Tooltip title="深度评测会读取实际代码文件、Spec文档、架构模式，提供更准确的评分">
+                    <SearchOutlined />
+                  </Tooltip>
+                </span>
+              }
+            >
+              <Radio.Group>
+                <Radio.Button value="quick">
+                  <ThunderboltOutlined /> 快速评测
+                </Radio.Button>
+                <Radio.Button value="deep">
+                  <SearchOutlined /> 深度评测
+                </Radio.Button>
+              </Radio.Group>
             </Form.Item>
 
             <Form.Item
@@ -153,8 +177,10 @@ const Evaluate = () => {
         <Card>
           <Result
             status="info"
-            title={currentStep === 1 ? '正在分析代码...' : '正在进行 AI 评测...'}
-            subTitle="这可能需要 1-3 分钟，请耐心等待"
+            title={currentStep === 1 ? '正在深度分析代码...' : '正在进行 AI 评测...'}
+            subTitle={currentStep === 1 
+              ? '扫描子服务、API端点、数据模型、代码样本...' 
+              : '多角色 AI 正在评估中，深度评测可能需要 2-5 分钟'}
             extra={
               <Button loading>
                 {currentStep === 1 ? '分析中' : '评测中'}
