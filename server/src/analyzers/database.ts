@@ -8,6 +8,7 @@ export interface EntityInfo {
   columns: ColumnInfo[];
   relations: RelationInfo[];
   file: string;
+  orm: 'typeorm' | 'sqlalchemy' | 'prisma' | 'drizzle' | 'unknown';
 }
 
 export interface ColumnInfo {
@@ -18,7 +19,7 @@ export interface ColumnInfo {
 }
 
 export interface RelationInfo {
-  type: 'OneToMany' | 'ManyToOne' | 'OneToOne' | 'ManyToMany';
+  type: 'OneToMany' | 'ManyToOne' | 'OneToOne' | 'ManyToMany' | 'ForeignKey';
   target: string;
   field: string;
 }
@@ -28,43 +29,81 @@ export interface DatabaseAnalysis {
   totalEntities: number;
   totalColumns: number;
   relations: number;
+  orms: string[];
+  hasMigrations: boolean;
+  migrationCount: number;
 }
 
 export async function analyzeDatabase(projectPath: string): Promise<DatabaseAnalysis> {
   const entities: EntityInfo[] = [];
   let totalColumns = 0;
   let totalRelations = 0;
+  const orms = new Set<string>();
 
+  // TypeORM entities
+  const typeormEntities = await analyzeTypeOrmEntities(projectPath);
+  if (typeormEntities.length > 0) orms.add('TypeORM');
+  entities.push(...typeormEntities);
+
+  // SQLAlchemy models
+  const sqlalchemyEntities = await analyzeSqlAlchemyModels(projectPath);
+  if (sqlalchemyEntities.length > 0) orms.add('SQLAlchemy');
+  entities.push(...sqlalchemyEntities);
+
+  // Prisma models
+  const prismaEntities = await analyzePrismaModels(projectPath);
+  if (prismaEntities.length > 0) orms.add('Prisma');
+  entities.push(...prismaEntities);
+
+  // Drizzle ORM tables
+  const drizzleEntities = await analyzeDrizzleEntities(projectPath);
+  if (drizzleEntities.length > 0) orms.add('Drizzle');
+  entities.push(...drizzleEntities);
+
+  for (const entity of entities) {
+    totalColumns += entity.columns.length;
+    totalRelations += entity.relations.length;
+  }
+
+  // Check migrations
+  const { hasMigrations, migrationCount } = await detectMigrations(projectPath);
+
+  return {
+    entities,
+    totalEntities: entities.length,
+    totalColumns,
+    relations: totalRelations,
+    orms: Array.from(orms),
+    hasMigrations,
+    migrationCount,
+  };
+}
+
+// --- TypeORM ---
+async function analyzeTypeOrmEntities(projectPath: string): Promise<EntityInfo[]> {
+  const entities: EntityInfo[] = [];
   const entityFiles = await glob('**/src/**/*.entity.ts', {
-    cwd: projectPath,
-    ignore: ['**/node_modules/**'],
+    cwd: projectPath, ignore: ['**/node_modules/**'],
   });
 
   for (const file of entityFiles) {
     const filePath = path.join(projectPath, file);
     const content = fs.readFileSync(filePath, 'utf-8');
-
     const entityMatch = content.match(/@Entity\(['"]?([^'")\s]*)?['"]?\)/);
     if (!entityMatch) continue;
 
     const classMatch = content.match(/export\s+class\s+(\w+)/);
     const entityName = classMatch ? classMatch[1] : path.basename(file, '.entity.ts');
     const tableName = entityMatch[1] || entityName.toLowerCase();
-
     const columns: ColumnInfo[] = [];
     const relations: RelationInfo[] = [];
 
     const columnPattern = /@(?:Column|PrimaryGeneratedColumn|PrimaryColumn)\(([^)]*)\)\s*\n\s*(\w+)(?:\?)?:\s*(\w+)/g;
     let columnMatch;
     while ((columnMatch = columnPattern.exec(content)) !== null) {
-      const options = columnMatch[1];
-      const name = columnMatch[2];
-      const type = columnMatch[3];
-      
       columns.push({
-        name,
-        type,
-        nullable: options.includes('nullable: true'),
+        name: columnMatch[2], type: columnMatch[3],
+        nullable: columnMatch[1].includes('nullable: true'),
         primary: columnMatch[0].includes('Primary'),
       });
     }
@@ -75,36 +114,228 @@ export async function analyzeDatabase(projectPath: string): Promise<DatabaseAnal
       { pattern: /@OneToOne\([^)]+\)\s*\n\s*(\w+)/g, type: 'OneToOne' as const },
       { pattern: /@ManyToMany\([^)]+\)\s*\n\s*(\w+)/g, type: 'ManyToMany' as const },
     ];
-
     for (const { pattern, type } of relationPatterns) {
       let relMatch;
       while ((relMatch = pattern.exec(content)) !== null) {
-        const targetMatch = content.substring(relMatch.index - 100, relMatch.index + 50)
-          .match(/=>\s*(\w+)/);
+        const targetMatch = content.substring(relMatch.index - 100, relMatch.index + 50).match(/=>\s*(\w+)/);
+        relations.push({ type, target: targetMatch ? targetMatch[1] : 'unknown', field: relMatch[1] });
+      }
+    }
+    entities.push({ name: entityName, tableName, columns, relations, file, orm: 'typeorm' });
+  }
+  return entities;
+}
+
+// --- SQLAlchemy ---
+async function analyzeSqlAlchemyModels(projectPath: string): Promise<EntityInfo[]> {
+  const entities: EntityInfo[] = [];
+  const pyFiles = await glob('**/models*.py', {
+    cwd: projectPath,
+    ignore: ['**/node_modules/**', '**/.venv/**', '**/venv/**', '**/__pycache__/**', '**/migrations/**', '**/alembic/**'],
+  });
+
+  // Also check app/models/ directory pattern
+  const modelDirFiles = await glob('**/models/**/*.py', {
+    cwd: projectPath,
+    ignore: ['**/node_modules/**', '**/.venv/**', '**/venv/**', '**/__pycache__/**', '**/migrations/**', '**/alembic/**'],
+  });
+
+  const allFiles = [...new Set([...pyFiles, ...modelDirFiles])];
+
+  for (const file of allFiles) {
+    const filePath = path.join(projectPath, file);
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      if (!content.includes('Column') && !content.includes('mapped_column') && !content.includes('Mapped')) continue;
+
+      // Match class Xxx(Base) or class Xxx(db.Model) patterns
+      const classPattern = /class\s+(\w+)\s*\([^)]*(?:Base|Model|DeclarativeBase|db\.Model)[^)]*\)\s*:/g;
+      let classMatch;
+      while ((classMatch = classPattern.exec(content)) !== null) {
+        const className = classMatch[1];
+        const columns: ColumnInfo[] = [];
+        const relations: RelationInfo[] = [];
+
+        // Get class body (until next class or end)
+        const classStart = classMatch.index;
+        const nextClassMatch = content.substring(classStart + 10).match(/\nclass\s+\w+/);
+        const classBody = nextClassMatch
+          ? content.substring(classStart, classStart + 10 + nextClassMatch.index)
+          : content.substring(classStart);
+
+        // Table name
+        const tableMatch = classBody.match(/__tablename__\s*=\s*['"](\w+)['"]/);
+        const tableName = tableMatch ? tableMatch[1] : className.toLowerCase();
+
+        // SQLAlchemy 2.0 style: field: Mapped[type] = mapped_column(...)
+        const mappedPattern = /(\w+)\s*:\s*Mapped\[([^\]]+)\]\s*=\s*mapped_column\(([^)]*)\)/g;
+        let colMatch;
+        while ((colMatch = mappedPattern.exec(classBody)) !== null) {
+          columns.push({
+            name: colMatch[1], type: colMatch[2].replace(/Optional\[|\]/g, ''),
+            nullable: colMatch[2].includes('Optional') || colMatch[3].includes('nullable=True'),
+            primary: colMatch[3].includes('primary_key=True') || colMatch[3].includes('primary_key'),
+          });
+        }
+
+        // Classic style: field = Column(Type, ...)
+        const classicPattern = /(\w+)\s*=\s*Column\(\s*(\w+)(?:\([^)]*\))?\s*(?:,\s*([^)]*))?\)/g;
+        while ((colMatch = classicPattern.exec(classBody)) !== null) {
+          const opts = colMatch[3] || '';
+          columns.push({
+            name: colMatch[1], type: colMatch[2],
+            nullable: opts.includes('nullable=True') || !opts.includes('nullable=False'),
+            primary: opts.includes('primary_key=True') || opts.includes('primary_key'),
+          });
+        }
+
+        // Relationships
+        const relPattern = /(\w+)\s*(?::\s*Mapped[^=]*)?=\s*relationship\(\s*['"]?(\w+)['"]?/g;
+        let relMatch;
+        while ((relMatch = relPattern.exec(classBody)) !== null) {
+          relations.push({ type: 'OneToMany', target: relMatch[2], field: relMatch[1] });
+        }
+
+        // ForeignKey
+        const fkPattern = /(\w+)\s*(?::\s*Mapped[^=]*)?=\s*(?:mapped_column|Column)\([^)]*ForeignKey\(\s*['"]([^'"]+)['"]\)/g;
+        while ((relMatch = fkPattern.exec(classBody)) !== null) {
+          relations.push({ type: 'ForeignKey', target: relMatch[2].split('.')[0], field: relMatch[1] });
+        }
+
+        if (columns.length > 0 || relations.length > 0) {
+          entities.push({ name: className, tableName, columns, relations, file, orm: 'sqlalchemy' });
+        }
+      }
+    } catch { /* skip */ }
+  }
+  return entities;
+}
+
+// --- Prisma ---
+async function analyzePrismaModels(projectPath: string): Promise<EntityInfo[]> {
+  const entities: EntityInfo[] = [];
+  const schemaFiles = await glob('**/schema.prisma', {
+    cwd: projectPath, ignore: ['**/node_modules/**'],
+  });
+
+  for (const file of schemaFiles) {
+    const filePath = path.join(projectPath, file);
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const modelPattern = /model\s+(\w+)\s*\{([^}]+)\}/g;
+      let modelMatch;
+      while ((modelMatch = modelPattern.exec(content)) !== null) {
+        const modelName = modelMatch[1];
+        const body = modelMatch[2];
+        const columns: ColumnInfo[] = [];
+        const relations: RelationInfo[] = [];
+
+        const lines = body.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('@@') && !l.startsWith('//'));
+        for (const line of lines) {
+          const fieldMatch = line.match(/^(\w+)\s+(String|Int|Float|Boolean|DateTime|BigInt|Decimal|Json|Bytes)(\?)?/);
+          if (fieldMatch) {
+            columns.push({
+              name: fieldMatch[1], type: fieldMatch[2],
+              nullable: !!fieldMatch[3], primary: line.includes('@id'),
+            });
+          }
+          const relMatch = line.match(/^(\w+)\s+(\w+)(\[\])?\s/);
+          if (relMatch && !fieldMatch) {
+            relations.push({ type: relMatch[3] ? 'OneToMany' : 'ManyToOne', target: relMatch[2], field: relMatch[1] });
+          }
+        }
+        entities.push({ name: modelName, tableName: modelName.toLowerCase(), columns, relations, file, orm: 'prisma' });
+      }
+    } catch { /* skip */ }
+  }
+  return entities;
+}
+
+// --- Migrations ---
+async function detectMigrations(projectPath: string): Promise<{ hasMigrations: boolean; migrationCount: number }> {
+  let count = 0;
+  // Alembic
+  const alembicFiles = await glob('**/alembic/versions/*.py', { cwd: projectPath, ignore: ['**/node_modules/**', '**/.venv/**'] });
+  count += alembicFiles.length;
+  // TypeORM
+  const typeormMigrations = await glob('**/migrations/*.ts', { cwd: projectPath, ignore: ['**/node_modules/**'] });
+  count += typeormMigrations.length;
+  // Prisma
+  const prismaMigrations = await glob('**/prisma/migrations/*/migration.sql', { cwd: projectPath, ignore: ['**/node_modules/**'] });
+  count += prismaMigrations.length;
+  // Custom migrations
+  const customMigrations = await glob('**/migrations/*.py', { cwd: projectPath, ignore: ['**/node_modules/**', '**/.venv/**', '**/alembic/**'] });
+  count += customMigrations.length;
+  // Drizzle migrations
+  const drizzleMigrations = await glob('**/drizzle/*.sql', { cwd: projectPath, ignore: ['**/node_modules/**'] });
+  count += drizzleMigrations.length;
+
+  return { hasMigrations: count > 0, migrationCount: count };
+}
+
+// --- Drizzle ORM ---
+async function analyzeDrizzleEntities(projectPath: string): Promise<EntityInfo[]> {
+  const entities: EntityInfo[] = [];
+  const schemaFiles = await glob('**/src/**/*.ts', {
+    cwd: projectPath,
+    ignore: ['**/node_modules/**', '**/*.test.ts', '**/*.spec.ts'],
+  });
+
+  for (const file of schemaFiles) {
+    const filePath = path.join(projectPath, file);
+    let content: string;
+    try {
+      content = fs.readFileSync(filePath, 'utf-8');
+    } catch { continue; }
+
+    // Must import from drizzle-orm
+    if (!content.includes('drizzle-orm')) continue;
+
+    // Match sqliteTable / pgTable / mysqlTable calls
+    const tablePattern = /export\s+const\s+(\w+)\s*=\s*(?:sqliteTable|pgTable|mysqlTable)\(\s*['"]([\w-]+)['"]\s*,\s*\{([^}]+(?:\{[^}]*\}[^}]*)*)\}/g;
+    let tableMatch;
+    while ((tableMatch = tablePattern.exec(content)) !== null) {
+      const varName = tableMatch[1];
+      const tableName = tableMatch[2];
+      const body = tableMatch[3];
+      const columns: ColumnInfo[] = [];
+      const relations: RelationInfo[] = [];
+
+      // Parse columns: fieldName: text('col_name').notNull().primaryKey()
+      const colPattern = /(\w+):\s*(?:text|integer|real|blob)\(['"]([\w-]*)['"](?:,\s*\{[^}]*\})?\)([^,\n]*)/g;
+      let colMatch;
+      while ((colMatch = colPattern.exec(body)) !== null) {
+        const chain = colMatch[3] || '';
+        columns.push({
+          name: colMatch[1],
+          type: colMatch[0].match(/^\w+:\s*(\w+)/)?.[1] || 'text',
+          nullable: !chain.includes('.notNull()'),
+          primary: chain.includes('.primaryKey()'),
+        });
+      }
+
+      // Detect .references(() => xxx.id) as ForeignKey relations
+      const refPattern = /(\w+):[^,]*\.references\(\(\)\s*=>\s*(\w+)\.(\w+)\)/g;
+      let refMatch;
+      while ((refMatch = refPattern.exec(body)) !== null) {
         relations.push({
-          type,
-          target: targetMatch ? targetMatch[1] : 'unknown',
-          field: relMatch[1],
+          type: 'ForeignKey',
+          target: refMatch[2],
+          field: refMatch[1],
+        });
+      }
+
+      if (columns.length > 0) {
+        entities.push({
+          name: varName,
+          tableName,
+          columns,
+          relations,
+          file,
+          orm: 'drizzle',
         });
       }
     }
-
-    totalColumns += columns.length;
-    totalRelations += relations.length;
-
-    entities.push({
-      name: entityName,
-      tableName,
-      columns,
-      relations,
-      file,
-    });
   }
-
-  return {
-    entities,
-    totalEntities: entities.length,
-    totalColumns,
-    relations: totalRelations,
-  };
+  return entities;
 }
