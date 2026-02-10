@@ -23,24 +23,27 @@ const router = Router();
 interface EvaluateRequest {
   projectPath: string;
   projectName: string;
-  roles: ('boss' | 'merchant' | 'operator')[];
+  roles: ('boss' | 'merchant' | 'operator' | 'architect')[];
   context: string;
+  depth: 'quick' | 'deep';
+  rolePrompts?: Record<string, string>;
 }
 
 router.post('/', async (req: Request, res: Response) => {
   try {
-    const { projectPath, projectName, roles, context } = req.body as EvaluateRequest;
+    const { projectPath, projectName, roles, context, depth, rolePrompts } = req.body as EvaluateRequest;
 
     if (!projectPath || !projectName) {
       return res.status(400).json({ error: 'projectPath and projectName are required' });
     }
 
     const selectedRoles = roles || ['boss', 'merchant', 'operator'];
+    const selectedDepth = depth || 'quick';
     const evaluationId = createEvaluation(projectName, projectPath, context || '');
 
-    res.json({ id: evaluationId, status: 'started' });
+    res.json({ id: evaluationId, status: 'started', depth: selectedDepth });
 
-    runEvaluation(evaluationId, projectPath, projectName, selectedRoles, context || '').catch(console.error);
+    runEvaluation(evaluationId, projectPath, projectName, selectedRoles, context || '', selectedDepth, rolePrompts).catch(console.error);
   } catch (error) {
     console.error('Evaluation error:', error);
     res.status(500).json({ error: 'Failed to start evaluation' });
@@ -51,15 +54,20 @@ async function runEvaluation(
   evaluationId: string,
   projectPath: string,
   projectName: string,
-  roles: ('boss' | 'merchant' | 'operator')[],
-  context: string
+  roles: ('boss' | 'merchant' | 'operator' | 'architect')[],
+  context: string,
+  depth: 'quick' | 'deep',
+  rolePrompts?: Record<string, string>
 ) {
   try {
     emitStarted(evaluationId, projectName);
     updateEvaluationStatus(evaluationId, 'analyzing');
     emitAnalyzing(evaluationId);
 
-    const analysis = await analyzeProject(projectPath);
+    console.log(`[${evaluationId}] Starting ${depth} analysis of ${projectName}...`);
+    const analysis = await analyzeProject(projectPath, depth);
+    console.log(`[${evaluationId}] Analysis complete: ${analysis.api.totalEndpoints} endpoints, ${analysis.database.totalEntities} entities, ${analysis.metrics.totalFiles} files`);
+    
     updateEvaluationStatus(evaluationId, 'evaluating', JSON.stringify(analysis));
 
     const scores: number[] = [];
@@ -67,10 +75,10 @@ async function runEvaluation(
     for (let i = 0; i < roles.length; i++) {
       const role = roles[i];
       try {
-        console.log(`Evaluating with role: ${role}`);
+        console.log(`[${evaluationId}] Evaluating with role: ${role} (${depth} mode)`);
         emitEvaluatingRole(evaluationId, role, i, roles.length);
         
-        const result = await evaluateWithRole(role, analysis.summary, context);
+        const result = await evaluateWithRole(role, analysis.summary, context, depth, rolePrompts?.[role]);
         
         let parsed: any;
         try {
@@ -95,6 +103,7 @@ async function runEvaluation(
           parsed.summary || '',
           JSON.stringify(parsed)
         );
+        console.log(`[${evaluationId}] Role ${role} scored: ${score}`);
       } catch (error) {
         console.error(`Error evaluating role ${role}:`, error);
         saveRoleEvaluation(evaluationId, role, 0, 'Evaluation failed', JSON.stringify({ error: String(error) }));
@@ -107,7 +116,7 @@ async function runEvaluation(
 
     completeEvaluation(evaluationId, overallScore);
     emitCompleted(evaluationId, overallScore);
-    console.log(`Evaluation ${evaluationId} completed with score: ${overallScore}`);
+    console.log(`[${evaluationId}] Evaluation completed with score: ${overallScore}`);
   } catch (error) {
     console.error('Evaluation failed:', error);
     updateEvaluationStatus(evaluationId, 'failed');
