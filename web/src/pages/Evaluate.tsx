@@ -1,10 +1,47 @@
-import { useState } from 'react';
-import { Card, Form, Input, Button, Checkbox, message, Steps, Result, Radio, Tooltip } from 'antd';
+import { useState, useEffect, useCallback } from 'react';
+import {
+  Card, Form, Input, Button, Checkbox, message, Steps, Result, Radio,
+  Tooltip, Collapse, Select, Space, Typography, Tag, Switch,
+} from 'antd';
 import { useNavigate } from 'react-router-dom';
-import { FolderOpenOutlined, RocketOutlined, ThunderboltOutlined, SearchOutlined } from '@ant-design/icons';
+import {
+  FolderOpenOutlined, RocketOutlined, ThunderboltOutlined, SearchOutlined,
+  EditOutlined, SaveOutlined, ImportOutlined,
+} from '@ant-design/icons';
 import { evaluationApi } from '../services/api';
 
 const { TextArea } = Input;
+const { Text } = Typography;
+
+const PRESETS_KEY = 'code-reviewer-role-presets';
+
+interface RolePreset {
+  name: string;
+  prompts: Record<string, string>;
+}
+
+const ROLE_LABELS: Record<string, string> = {
+  boss: '👔 老板视角',
+  merchant: '🏪 商户视角',
+  operator: '⚙️ 运营视角',
+  architect: '🏗️ 架构师视角',
+  growth: '📈 增长/分发',
+  skeptic: '🔴 质疑者/红队',
+  pricing: '💰 定价策略',
+  data_metrics: '📊 数据与指标',
+  delivery: '🚀 交付经理',
+};
+
+function loadPresets(): RolePreset[] {
+  try {
+    const raw = localStorage.getItem(PRESETS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+function savePresets(presets: RolePreset[]) {
+  localStorage.setItem(PRESETS_KEY, JSON.stringify(presets));
+}
 
 const Evaluate = () => {
   const navigate = useNavigate();
@@ -13,12 +50,70 @@ const Evaluate = () => {
   const [currentStep, setCurrentStep] = useState(0);
   const [evaluationId, setEvaluationId] = useState<string | null>(null);
 
-  const roleOptions = [
+  const [useCustomPrompts, setUseCustomPrompts] = useState(false);
+  const [rolePrompts, setRolePrompts] = useState<Record<string, string>>({});
+  const [presets, setPresets] = useState<RolePreset[]>([]);
+  const [presetName, setPresetName] = useState('');
+
+  useEffect(() => { setPresets(loadPresets()); }, []);
+
+  const primaryRoleOptions = [
     { label: '👔 老板视角 (战略决策)', value: 'boss' },
-    { label: '🏪 商户视角 (B2B客户)', value: 'merchant' },
+    { label: '🏪 商户视角 (目标用户)', value: 'merchant' },
     { label: '⚙️ 运营视角 (日常管理)', value: 'operator' },
     { label: '🏗️ 架构师视角 (技术深度)', value: 'architect' },
   ];
+
+  const extendedRoleOptions = [
+    { label: '📈 增长/分发 (获客留存)', value: 'growth' },
+    { label: '🔴 质疑者/红队 (找致命缺陷)', value: 'skeptic' },
+    { label: '💰 定价策略 (商业化)', value: 'pricing' },
+    { label: '📊 数据与指标 (埋点/看板)', value: 'data_metrics' },
+    { label: '🚀 交付经理 (项目管理)', value: 'delivery' },
+  ];
+
+  const evaluationMode = Form.useWatch('mode', form) || 'standard';
+
+  const handleSavePreset = useCallback(() => {
+    if (!presetName.trim()) { message.warning('请输入预设名称'); return; }
+    const existing = presets.filter(p => p.name !== presetName.trim());
+    const updated = [...existing, { name: presetName.trim(), prompts: { ...rolePrompts } }];
+    setPresets(updated);
+    savePresets(updated);
+    message.success(`预设「${presetName.trim()}」已保存`);
+  }, [presetName, rolePrompts, presets]);
+
+  const handleLoadPreset = useCallback((name: string) => {
+    const preset = presets.find(p => p.name === name);
+    if (preset) {
+      setRolePrompts({ ...preset.prompts });
+      setUseCustomPrompts(true);
+      message.success(`已加载预设「${name}」`);
+    }
+  }, [presets]);
+
+  const handleDeletePreset = useCallback((name: string) => {
+    const updated = presets.filter(p => p.name !== name);
+    setPresets(updated);
+    savePresets(updated);
+    message.info(`已删除预设「${name}」`);
+  }, [presets]);
+
+  const handleImportFromFile = useCallback(async () => {
+    try {
+      const res = await fetch('/prompts/ddt-monodt-roles.json');
+      if (!res.ok) {
+        message.error('无法加载预设文件，请确认文件路径');
+        return;
+      }
+      const data = await res.json();
+      setRolePrompts(data);
+      setUseCustomPrompts(true);
+      message.success('已从服务端导入角色 Prompt');
+    } catch {
+      message.error('导入失败');
+    }
+  }, []);
 
   const handleSubmit = async (values: {
     projectPath: string;
@@ -26,18 +121,46 @@ const Evaluate = () => {
     roles: string[];
     context: string;
     depth: string;
+    mode: string;
+    launchWindow?: string;
+    launchChannels?: string;
+    launchConstraints?: string;
+    pricingExpectation?: string;
   }) => {
     setLoading(true);
     setCurrentStep(1);
 
+    const selectedRoles = values.roles || ['boss', 'merchant', 'operator'];
+    const promptsToSend: Record<string, string> = {};
+    if (useCustomPrompts) {
+      for (const role of selectedRoles) {
+        if (rolePrompts[role]?.trim()) {
+          promptsToSend[role] = rolePrompts[role].trim();
+        }
+      }
+    }
+
+    const payload: Record<string, unknown> = {
+      projectPath: values.projectPath,
+      projectName: values.projectName,
+      roles: selectedRoles,
+      context: values.context || '',
+      depth: values.depth || 'quick',
+      mode: values.mode || 'standard',
+      ...(Object.keys(promptsToSend).length > 0 ? { rolePrompts: promptsToSend } : {}),
+    };
+
+    if (values.mode === 'launch-ready') {
+      payload.launchContext = {
+        launchWindow: values.launchWindow || '',
+        channels: values.launchChannels ? values.launchChannels.split(',').map((s: string) => s.trim()).filter(Boolean) : [],
+        constraints: values.launchConstraints || '',
+        pricingExpectation: values.pricingExpectation || '',
+      };
+    }
+
     try {
-      const res = await evaluationApi.startEvaluation({
-        projectPath: values.projectPath,
-        projectName: values.projectName,
-        roles: values.roles || ['boss', 'merchant', 'operator'],
-        context: values.context || '',
-        depth: values.depth || 'quick',
-      });
+      const res = await evaluationApi.startEvaluation(payload);
 
       setEvaluationId(res.data.id);
       message.success('评测已启动');
@@ -71,6 +194,8 @@ const Evaluate = () => {
     checkStatus();
   };
 
+  const selectedRoles: string[] = Form.useWatch('roles', form) || [];
+
   return (
     <div>
       <Steps
@@ -92,9 +217,10 @@ const Evaluate = () => {
             onFinish={handleSubmit}
             initialValues={{
               roles: ['boss', 'merchant', 'operator', 'architect'],
+              mode: 'standard',
               projectPath: '/Users/hal/DDT-Monodt',
               projectName: 'DDT-Monodt',
-              context: 'DDT+ 数字孪生仓库管理操作系统（Monorepo），包含 WMS 后端(Python FastAPI)、WMS 前端(React)、ControlPlane 智能体操作系统、TradeOS 合规接口等子服务。面向香港分销行业，提供事件驱动的仓库管理和AI辅助运营。',
+              context: 'DDT+ 数字孪生仓库管理操作系统（Monorepo），包含 WMS 后端(Python FastAPI)、WMS 前端(React)、ControlPlane 智能体操作系统、TradeOS 合规接口等子服务。面向香港分销行业，提供事件驱动的仓库管理和AI辅助运营。采用 Agent-First 三层架构（Agent Swarm → Skills → Case/Workflow），12 个 Skills、6 个 DomainAgents、24+ 意图路由、170 个自动化测试。',
               depth: 'deep',
             }}
           >
@@ -151,11 +277,154 @@ const Evaluate = () => {
             </Form.Item>
 
             <Form.Item
+              name="mode"
+              label="评测模式"
+            >
+              <Radio.Group>
+                <Radio.Button value="standard">
+                  📋 标准评测
+                </Radio.Button>
+                <Radio.Button value="launch-ready">
+                  🎯 Launch-Ready 评测
+                </Radio.Button>
+              </Radio.Group>
+            </Form.Item>
+
+            {evaluationMode === 'launch-ready' && (
+              <Card size="small" style={{ marginBottom: 16, background: '#f6ffed', border: '1px solid #b7eb8f' }}>
+                <Form.Item name="launchWindow" label="上线窗口" style={{ marginBottom: 8 }}>
+                  <Input placeholder="例如：7天内上线、2周后 beta" />
+                </Form.Item>
+                <Form.Item name="launchChannels" label="目标渠道（逗号分隔）" style={{ marginBottom: 8 }}>
+                  <Input placeholder="例如：微信群, 小红书, Product Hunt" />
+                </Form.Item>
+                <Form.Item name="launchConstraints" label="约束条件" style={{ marginBottom: 8 }}>
+                  <Input placeholder="例如：单人团队，预算<5k" />
+                </Form.Item>
+                <Form.Item name="pricingExpectation" label="定价预期" style={{ marginBottom: 0 }}>
+                  <Input placeholder="例如：SaaS 月费 ¥99-299" />
+                </Form.Item>
+              </Card>
+            )}
+
+            <Form.Item
               name="roles"
               label="评测角色"
               rules={[{ required: true, message: '请至少选择一个角色' }]}
             >
-              <Checkbox.Group options={roleOptions} />
+              <Checkbox.Group>
+                <div style={{ marginBottom: 4 }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>主评审</Text>
+                </div>
+                <div style={{ marginBottom: 12 }}>
+                  {primaryRoleOptions.map(o => (
+                    <Checkbox key={o.value} value={o.value} style={{ marginRight: 16, marginBottom: 4 }}>{o.label}</Checkbox>
+                  ))}
+                </div>
+                <div style={{ marginBottom: 4 }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>攻防与增长{evaluationMode === 'launch-ready' ? ' (Launch-Ready 推荐全选)' : ''}</Text>
+                </div>
+                <div>
+                  {extendedRoleOptions.map(o => (
+                    <Checkbox key={o.value} value={o.value} style={{ marginRight: 16, marginBottom: 4 }}>{o.label}</Checkbox>
+                  ))}
+                </div>
+              </Checkbox.Group>
+            </Form.Item>
+
+            {/* Custom Role Prompts Panel */}
+            <Form.Item label={
+              <Space>
+                <EditOutlined />
+                <span>自定义角色 Prompt</span>
+                <Switch
+                  size="small"
+                  checked={useCustomPrompts}
+                  onChange={setUseCustomPrompts}
+                />
+                {useCustomPrompts && (
+                  <Tag color="blue">已启用</Tag>
+                )}
+              </Space>
+            }>
+              {useCustomPrompts && (
+                <div style={{ marginBottom: 12 }}>
+                  <Space wrap style={{ marginBottom: 8 }}>
+                    <Button
+                      size="small"
+                      icon={<ImportOutlined />}
+                      onClick={handleImportFromFile}
+                    >
+                      导入 DDT-Monodt 专用角色
+                    </Button>
+                    {presets.length > 0 && (
+                      <Select
+                        size="small"
+                        placeholder="加载已保存预设"
+                        style={{ width: 180 }}
+                        onChange={handleLoadPreset}
+                        value={undefined}
+                        options={presets.map(p => ({ label: p.name, value: p.name }))}
+                      />
+                    )}
+                  </Space>
+                  <Space style={{ marginBottom: 12 }}>
+                    <Input
+                      size="small"
+                      placeholder="预设名称"
+                      value={presetName}
+                      onChange={e => setPresetName(e.target.value)}
+                      style={{ width: 160 }}
+                    />
+                    <Button size="small" icon={<SaveOutlined />} onClick={handleSavePreset}>
+                      保存预设
+                    </Button>
+                    {presets.length > 0 && (
+                      <Select
+                        size="small"
+                        placeholder="删除预设"
+                        style={{ width: 140 }}
+                        onChange={handleDeletePreset}
+                        value={undefined}
+                        options={presets.map(p => ({ label: `删除: ${p.name}`, value: p.name }))}
+                      />
+                    )}
+                  </Space>
+
+                  <Collapse
+                    size="small"
+                    items={selectedRoles.map(role => ({
+                      key: role,
+                      label: (
+                        <Space>
+                          <span>{ROLE_LABELS[role] || role}</span>
+                          {rolePrompts[role]?.trim() ? (
+                            <Tag color="green" style={{ fontSize: 11 }}>
+                              {rolePrompts[role].length} 字
+                            </Tag>
+                          ) : (
+                            <Tag style={{ fontSize: 11 }}>使用默认</Tag>
+                          )}
+                        </Space>
+                      ),
+                      children: (
+                        <div>
+                          <TextArea
+                            rows={8}
+                            value={rolePrompts[role] || ''}
+                            onChange={e => setRolePrompts(prev => ({ ...prev, [role]: e.target.value }))}
+                            placeholder={`自定义 ${ROLE_LABELS[role] || role} 的系统 Prompt...\n留空则使用内置默认 Prompt`}
+                            style={{ fontFamily: 'monospace', fontSize: 12 }}
+                          />
+                          <Text type="secondary" style={{ fontSize: 11, marginTop: 4, display: 'block' }}>
+                            留空 = 使用内置默认 Prompt。自定义后将完全替代默认 Prompt。
+                          </Text>
+                        </div>
+                      ),
+                    }))}
+                  />
+                </div>
+              )}
             </Form.Item>
 
             <Form.Item>

@@ -11,6 +11,14 @@ export interface EvaluationRequest {
   roles: string[];
   context: string;
   depth: string;
+  mode?: string;
+  launchContext?: {
+    launchWindow?: string;
+    channels?: string[];
+    constraints?: string;
+    pricingExpectation?: string;
+  };
+  rolePrompts?: Record<string, string>;
 }
 
 export interface EvaluationRecord {
@@ -37,7 +45,7 @@ export interface RoleEvaluation {
 }
 
 export const evaluationApi = {
-  startEvaluation: (data: EvaluationRequest) => api.post<{ id: string }>('/evaluate', data),
+  startEvaluation: (data: Record<string, unknown>) => api.post<{ id: string }>('/evaluate', data),
   getEvaluation: (id: string) => api.get<EvaluationRecord>(`/evaluate/${id}`),
   listHistory: (limit?: number) => api.get<EvaluationRecord[]>('/history', { params: { limit } }),
   getHistoryDetail: (id: string) => api.get<EvaluationRecord>(`/history/${id}`),

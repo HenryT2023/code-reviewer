@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Card, Row, Col, Tabs, Tag, List, Spin, Button, Descriptions, Progress } from 'antd';
+import { Card, Row, Col, Tabs, Tag, List, Spin, Button, Descriptions, Progress, Typography } from 'antd';
 import { ArrowLeftOutlined, DownloadOutlined } from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
 import { evaluationApi, EvaluationRecord } from '../services/api';
+
+const { Text } = Typography;
 
 const Report = () => {
   const { id } = useParams<{ id: string }>();
@@ -64,6 +66,14 @@ const Report = () => {
       boss: '👔 老板视角',
       merchant: '🏪 商户视角',
       operator: '⚙️ 运营视角',
+      architect: '🏗️ 架构师视角',
+      growth: '📈 增长/分发',
+      skeptic: '🔴 质疑者/红队',
+      pricing: '💰 定价策略',
+      data_metrics: '📊 数据与指标',
+      delivery: '🚀 交付经理',
+      _debate: '🔴 对喷摘要',
+      _orchestrator: '🎯 Launch-Ready 报告',
     };
     return names[role] || role;
   };
@@ -77,7 +87,7 @@ const Report = () => {
   };
 
   const renderRoleTab = (role: { role: string; score: number | null; summary: string | null; details: Record<string, unknown> | null }) => {
-    const details = role.details || {};
+    const details = (role.details || {}) as Record<string, any>;
     const dimensions = (details.dimensions || {}) as Record<string, { score?: number; comment?: string }>;
 
     return (
@@ -195,6 +205,163 @@ const Report = () => {
     );
   };
 
+  const renderDebateTab = (role: { role: string; score: number | null; summary: string | null; details: Record<string, unknown> | null }) => {
+    const d = role.details || {} as Record<string, unknown>;
+    const consensus = (d.consensus || []) as string[];
+    const disputes = (d.disputes || []) as Array<{ topic: string; support?: string[]; oppose?: string[]; resolution?: string }>;
+    const unresolved = (d.unresolved || []) as string[];
+
+    return (
+      <div>
+        <Card title="📋 对喷摘要" style={{ marginBottom: 16 }}>
+          <p>{role.summary || '暂无摘要'}</p>
+        </Card>
+
+        {consensus.length > 0 && (
+          <Card title="✅ 共识" style={{ marginBottom: 16 }}>
+            <List size="small" dataSource={consensus} renderItem={(item: string) => (
+              <List.Item><Tag color="green">{item}</Tag></List.Item>
+            )} />
+          </Card>
+        )}
+
+        {disputes.length > 0 && (
+          <Card title="⚔️ 争议" style={{ marginBottom: 16 }}>
+            {disputes.map((disp, i) => (
+              <Card key={i} size="small" style={{ marginBottom: 8 }} title={disp.topic}>
+                {disp.support?.length ? (
+                  <div style={{ marginBottom: 8 }}>
+                    <Text type="success" strong>支持：</Text>
+                    {disp.support.map((s, j) => <Tag key={j} color="green" style={{ marginBottom: 4 }}>{s}</Tag>)}
+                  </div>
+                ) : null}
+                {disp.oppose?.length ? (
+                  <div style={{ marginBottom: 8 }}>
+                    <Text type="danger" strong>反对：</Text>
+                    {disp.oppose.map((s, j) => <Tag key={j} color="red" style={{ marginBottom: 4 }}>{s}</Tag>)}
+                  </div>
+                ) : null}
+                {disp.resolution && (
+                  <div><Text strong>→ 裁决：</Text> {disp.resolution}</div>
+                )}
+              </Card>
+            ))}
+          </Card>
+        )}
+
+        {unresolved.length > 0 && (
+          <Card title="❓ 未解决">
+            <List size="small" dataSource={unresolved} renderItem={(item: string) => (
+              <List.Item><Tag color="orange">{item}</Tag></List.Item>
+            )} />
+          </Card>
+        )}
+      </div>
+    );
+  };
+
+  const renderOrchestratorTab = (role: { role: string; score: number | null; summary: string | null; details: Record<string, unknown> | null }) => {
+    const d = role.details || {} as Record<string, unknown>;
+    const verdict = (d.launch_verdict as string) || 'N/A';
+    const score = (d.overall_score as number) || 0;
+    const conditions = (d.verdict_conditions || []) as string[];
+    const sections = (d.sections || {}) as Record<string, Record<string, unknown>>;
+    const actionItems = (d.action_items || []) as Array<Record<string, unknown>>;
+
+    const verdictColor = verdict === 'GO' ? '#52c41a' : verdict === 'NO-GO' ? '#f5222d' : '#faad14';
+
+    const sectionTitles: Record<string, string> = {
+      A_launch_definition: 'A. Launch 定义与验收标准',
+      B_icp_and_market: 'B. ICP 与市场',
+      C_core_transaction: 'C. 核心交易与价值主张',
+      D_release_scope: 'D. Release Scope',
+      E_debate_summary: 'E. 专家对喷摘要',
+      F_experiments: 'F. 验证实验',
+      G_instrumentation: 'G. 数据埋点与监控',
+      H_roadmap: 'H. 迭代路线图',
+      I_risks: 'I. 风险登记表',
+      J_pricing: 'J. 定价与商业化',
+    };
+
+    return (
+      <div>
+        <Card style={{ marginBottom: 16 }}>
+          <Row gutter={16} align="middle">
+            <Col span={6} style={{ textAlign: 'center' }}>
+              <Progress
+                type="circle"
+                percent={score}
+                format={() => `${score}`}
+                strokeColor={verdictColor}
+              />
+            </Col>
+            <Col span={18}>
+              <div style={{ fontSize: 24, fontWeight: 'bold', color: verdictColor, marginBottom: 8 }}>
+                Launch Verdict: {verdict}
+              </div>
+              <p>{role.summary || ''}</p>
+              {conditions.length > 0 && (
+                <div>
+                  <Text strong>前提条件：</Text>
+                  <ul style={{ margin: '4px 0' }}>
+                    {conditions.map((c, i) => <li key={i}>{c}</li>)}
+                  </ul>
+                </div>
+              )}
+            </Col>
+          </Row>
+        </Card>
+
+        {Object.entries(sectionTitles).map(([key, title]) => {
+          const section = sections[key];
+          if (!section) return null;
+          return (
+            <Card key={key} title={title} size="small" style={{ marginBottom: 12 }}>
+              <pre style={{ fontSize: 12, whiteSpace: 'pre-wrap', background: '#f5f5f5', padding: 12, borderRadius: 4, maxHeight: 300, overflow: 'auto' }}>
+                {JSON.stringify(section, null, 2)}
+              </pre>
+            </Card>
+          );
+        })}
+
+        {actionItems.length > 0 && (
+          <Card title="📝 Action Items" style={{ marginBottom: 16 }}>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ background: '#fafafa', borderBottom: '2px solid #e8e8e8' }}>
+                    <th style={{ padding: '8px 12px', textAlign: 'left' }}>ID</th>
+                    <th style={{ padding: '8px 12px', textAlign: 'left' }}>任务</th>
+                    <th style={{ padding: '8px 12px', textAlign: 'left' }}>优先级</th>
+                    <th style={{ padding: '8px 12px', textAlign: 'left' }}>负责角色</th>
+                    <th style={{ padding: '8px 12px', textAlign: 'left' }}>工时</th>
+                    <th style={{ padding: '8px 12px', textAlign: 'left' }}>验收标准</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {actionItems.map((a, i) => (
+                    <tr key={i} style={{ borderBottom: '1px solid #e8e8e8' }}>
+                      <td style={{ padding: '8px 12px' }}>{String(a.id || '-')}</td>
+                      <td style={{ padding: '8px 12px' }}>{String(a.task || '-')}</td>
+                      <td style={{ padding: '8px 12px' }}>
+                        <Tag color={a.priority === 'P0' ? 'red' : a.priority === 'P1' ? 'orange' : 'blue'}>
+                          {String(a.priority || '-')}
+                        </Tag>
+                      </td>
+                      <td style={{ padding: '8px 12px' }}>{String(a.owner_role || '-')}</td>
+                      <td style={{ padding: '8px 12px' }}>{a.effort_hours ? `${a.effort_hours}h` : '-'}</td>
+                      <td style={{ padding: '8px 12px', fontSize: 12 }}>{String(a.acceptance_criteria || '-')}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
+      </div>
+    );
+  };
+
   if (loading) {
     return (
       <div style={{ textAlign: 'center', padding: 100 }}>
@@ -207,11 +374,27 @@ const Report = () => {
     return <div>评测记录不存在</div>;
   }
 
-  const tabItems = evaluation.roleEvaluations?.map(role => ({
-    key: role.role,
-    label: getRoleName(role.role),
-    children: renderRoleTab(role),
-  })) || [];
+  const regularRoles = evaluation.roleEvaluations?.filter(r => !r.role.startsWith('_')) || [];
+  const debateRole = evaluation.roleEvaluations?.find(r => r.role === '_debate');
+  const orchestratorRole = evaluation.roleEvaluations?.find(r => r.role === '_orchestrator');
+
+  const tabItems = [
+    ...regularRoles.map(role => ({
+      key: role.role,
+      label: getRoleName(role.role),
+      children: renderRoleTab(role),
+    })),
+    ...(debateRole ? [{
+      key: '_debate',
+      label: '🔴 对喷摘要',
+      children: renderDebateTab(debateRole),
+    }] : []),
+    ...(orchestratorRole ? [{
+      key: '_orchestrator',
+      label: '🎯 Launch-Ready',
+      children: renderOrchestratorTab(orchestratorRole),
+    }] : []),
+  ];
 
   return (
     <div>

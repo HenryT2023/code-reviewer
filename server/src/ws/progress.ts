@@ -3,7 +3,7 @@ import { Server } from 'http';
 
 export interface ProgressEvent {
   evaluationId: string;
-  type: 'started' | 'analyzing' | 'evaluating_role' | 'role_completed' | 'completed' | 'failed';
+  type: 'started' | 'analyzing' | 'evaluating_role' | 'role_completed' | 'debating' | 'orchestrating' | 'completed' | 'failed';
   message: string;
   progress: number;
   data?: Record<string, unknown>;
@@ -85,32 +85,36 @@ export function emitAnalyzing(evaluationId: string) {
   });
 }
 
+const ROLE_DISPLAY_NAMES: Record<string, string> = {
+  boss: '老板视角',
+  merchant: '商户视角',
+  operator: '运营视角',
+  architect: '架构师视角',
+  growth: '增长/分发',
+  skeptic: '质疑者/红队',
+  pricing: '定价策略',
+  data_metrics: '数据与指标',
+  delivery: '交付经理',
+  _debate: '对喷辩论',
+  _orchestrator: '总控合成',
+};
+
 export function emitEvaluatingRole(evaluationId: string, role: string, roleIndex: number, totalRoles: number) {
-  const roleNames: Record<string, string> = {
-    boss: '老板视角',
-    merchant: '商户视角',
-    operator: '运营视角',
-  };
   const progress = 20 + (roleIndex / totalRoles) * 60;
   emitProgress({
     evaluationId,
     type: 'evaluating_role',
-    message: `正在进行 ${roleNames[role] || role} 评测...`,
+    message: `正在进行 ${ROLE_DISPLAY_NAMES[role] || role} 评测...`,
     progress: Math.round(progress),
     data: { role, roleIndex, totalRoles },
   });
 }
 
 export function emitRoleCompleted(evaluationId: string, role: string, score: number) {
-  const roleNames: Record<string, string> = {
-    boss: '老板视角',
-    merchant: '商户视角',
-    operator: '运营视角',
-  };
   emitProgress({
     evaluationId,
     type: 'role_completed',
-    message: `${roleNames[role] || role} 评测完成: ${score}分`,
+    message: `${ROLE_DISPLAY_NAMES[role] || role} 评测完成: ${score}分`,
     progress: 80,
     data: { role, score },
   });
@@ -123,6 +127,24 @@ export function emitCompleted(evaluationId: string, overallScore: number) {
     message: `评测完成! 总评分: ${overallScore}分`,
     progress: 100,
     data: { overallScore },
+  });
+}
+
+export function emitDebating(evaluationId: string) {
+  emitProgress({
+    evaluationId,
+    type: 'debating',
+    message: '🔴 专家对喷辩论中...',
+    progress: 82,
+  });
+}
+
+export function emitOrchestrating(evaluationId: string) {
+  emitProgress({
+    evaluationId,
+    type: 'orchestrating',
+    message: '🎯 总控合成 Launch-Ready 报告...',
+    progress: 90,
   });
 }
 
