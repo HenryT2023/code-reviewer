@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Card, Form, Input, Button, Checkbox, message, Steps, Result, Radio,
-  Tooltip, Collapse, Select, Space, Typography, Tag, Switch,
+  Tooltip, Collapse, Select, Space, Typography, Tag, Switch, Alert,
 } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import {
   FolderOpenOutlined, RocketOutlined, ThunderboltOutlined, SearchOutlined,
-  EditOutlined, SaveOutlined, ImportOutlined,
+  EditOutlined, SaveOutlined, ImportOutlined, CheckSquareOutlined, MinusSquareOutlined,
+  StarOutlined, ExperimentOutlined,
 } from '@ant-design/icons';
 import { evaluationApi } from '../services/api';
 
@@ -14,6 +15,43 @@ const { TextArea } = Input;
 const { Text } = Typography;
 
 const PRESETS_KEY = 'code-reviewer-role-presets';
+const ROLES_STORAGE_KEY = 'code-reviewer-selected-roles';
+
+const ALL_ROLE_KEYS = ['boss', 'merchant', 'operator', 'architect', 'growth', 'skeptic', 'pricing', 'data_metrics', 'delivery'];
+const PRIMARY_ROLE_KEYS = ['boss', 'merchant', 'operator', 'architect'];
+const RECOMMENDED_ROLES = ['boss', 'merchant', 'architect'];
+const DEFAULT_ROLES = ['boss', 'merchant', 'operator', 'architect'];
+
+function loadSavedRoles(): string[] {
+  try {
+    const raw = localStorage.getItem(ROLES_STORAGE_KEY);
+    if (!raw) return DEFAULT_ROLES;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) return DEFAULT_ROLES;
+    const valid = parsed.filter((r: unknown) => typeof r === 'string' && ALL_ROLE_KEYS.includes(r as string));
+    return valid.length > 0 ? valid : DEFAULT_ROLES;
+  } catch { return DEFAULT_ROLES; }
+}
+
+function saveRolesToStorage(roles: string[]) {
+  localStorage.setItem(ROLES_STORAGE_KEY, JSON.stringify(roles));
+}
+
+function getRoleBiasHint(roles: string[]): string {
+  if (roles.length === 0) return '';
+  const tags: string[] = [];
+  const marketRoles = ['boss', 'merchant', 'pricing', 'growth'];
+  const opsRoles = ['operator', 'delivery', 'data_metrics'];
+  const techRoles = ['architect', 'skeptic'];
+  const hasMarket = roles.some(r => marketRoles.includes(r));
+  const hasOps = roles.some(r => opsRoles.includes(r));
+  const hasTech = roles.some(r => techRoles.includes(r));
+  if (hasMarket) tags.push('市场/商业');
+  if (hasTech) tags.push('技术/架构');
+  if (hasOps) tags.push('运营/交付');
+  if (tags.length === 0) return '';
+  return `已选择 ${roles.length} 个视角，评测更偏向：${tags.join(' + ')}`;
+}
 
 interface RolePreset {
   name: string;
@@ -73,6 +111,7 @@ const Evaluate = () => {
   ];
 
   const evaluationMode = Form.useWatch('mode', form) || 'standard';
+  const watchedDepth = Form.useWatch('depth', form) || 'quick';
 
   const handleSavePreset = useCallback(() => {
     if (!presetName.trim()) { message.warning('请输入预设名称'); return; }
@@ -195,6 +234,14 @@ const Evaluate = () => {
   };
 
   const selectedRoles: string[] = Form.useWatch('roles', form) || [];
+  const biasHint = getRoleBiasHint(selectedRoles);
+
+  // Persist roles to localStorage whenever they change
+  useEffect(() => {
+    if (selectedRoles && selectedRoles.length > 0) {
+      saveRolesToStorage(selectedRoles);
+    }
+  }, [selectedRoles]);
 
   return (
     <div>
@@ -216,7 +263,7 @@ const Evaluate = () => {
             layout="vertical"
             onFinish={handleSubmit}
             initialValues={{
-              roles: ['boss', 'merchant', 'operator', 'architect'],
+              roles: loadSavedRoles(),
               mode: 'standard',
               projectPath: '/Users/hal/DDT-Monodt',
               projectName: 'DDT-Monodt',
@@ -307,9 +354,31 @@ const Evaluate = () => {
               </Card>
             )}
 
+            {watchedDepth === 'deep' && selectedRoles.length < 4 && selectedRoles.length > 0 && (
+              <Alert
+                type="info"
+                showIcon
+                message="深度评测建议选择至少 4 个角色以获得更全面的评估"
+                style={{ marginBottom: 16 }}
+                action={
+                  <Button size="small" onClick={() => form.setFieldsValue({ roles: PRIMARY_ROLE_KEYS })}>
+                    一键选择 4 主角色
+                  </Button>
+                }
+              />
+            )}
+
             <Form.Item
               name="roles"
-              label="评测角色"
+              label={
+                <Space>
+                  <span>评测视角（Code Viewers）</span>
+                  <Button size="small" icon={<CheckSquareOutlined />} onClick={() => form.setFieldsValue({ roles: ALL_ROLE_KEYS })}>全选</Button>
+                  <Button size="small" icon={<MinusSquareOutlined />} onClick={() => form.setFieldsValue({ roles: [] })}>全不选</Button>
+                  <Button size="small" type="dashed" icon={<StarOutlined />} onClick={() => form.setFieldsValue({ roles: RECOMMENDED_ROLES })}>推荐配置</Button>
+                  <Button size="small" type="dashed" icon={<ExperimentOutlined />} onClick={() => form.setFieldsValue({ roles: PRIMARY_ROLE_KEYS })}>深度全选</Button>
+                </Space>
+              }
               rules={[{ required: true, message: '请至少选择一个角色' }]}
             >
               <Checkbox.Group>
@@ -331,6 +400,18 @@ const Evaluate = () => {
                 </div>
               </Checkbox.Group>
             </Form.Item>
+
+            {biasHint && (
+              <div style={{ marginTop: -12, marginBottom: 16, padding: '6px 12px', background: '#f0f5ff', borderRadius: 4, fontSize: 13 }}>
+                💡 {biasHint}
+              </div>
+            )}
+
+            {selectedRoles.length === 0 && (
+              <div style={{ marginTop: -12, marginBottom: 16 }}>
+                <Text type="danger">⚠️ 请至少选择 1 个评测视角</Text>
+              </div>
+            )}
 
             {/* Custom Role Prompts Panel */}
             <Form.Item label={
@@ -434,6 +515,7 @@ const Evaluate = () => {
                 icon={<RocketOutlined />}
                 size="large"
                 loading={loading}
+                disabled={selectedRoles.length === 0}
               >
                 开始评测
               </Button>
