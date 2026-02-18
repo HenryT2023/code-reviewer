@@ -83,7 +83,7 @@ export async function runDebateRound(roleResults: RoleResult[]): Promise<DebateR
     { role: 'user', content: buildDebateUserMessage(roleResults) },
   ];
 
-  const raw = await callQwen(messages, 'qwen-max', 8000);
+  const raw = await callQwen(messages, 'deepseek-chat', 8000);
 
   try {
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
@@ -268,7 +268,7 @@ export async function runOrchestrator(
     { role: 'user', content: buildOrchestratorUserMessage(projectAnalysis, context, roleResults, debate) },
   ];
 
-  const raw = await callQwen(messages, 'qwen-max', 8000);
+  const raw = await callQwen(messages, 'deepseek-chat', 8000);
 
   try {
     const jsonMatch = raw.match(/\{[\s\S]*\}/);

@@ -1,10 +1,10 @@
 import https from 'https';
 import { getRolePrompt } from './roles';
 
-const DASHSCOPE_URL = 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation';
+const DEEPSEEK_URL = 'https://api.deepseek.com/chat/completions';
 
 function getApiKey(): string {
-  return process.env.DASHSCOPE_API_KEY || '';
+  return process.env.DEEPSEEK_API_KEY || '';
 }
 
 export interface QwenMessage {
@@ -25,23 +25,18 @@ export interface QwenResponse {
 
 export async function callQwen(
   messages: QwenMessage[],
-  model: string = 'qwen-max',
+  model: string = 'deepseek-chat',
   maxTokens: number = 4000
 ): Promise<string> {
   const requestBody = JSON.stringify({
     model,
-    input: {
-      messages,
-    },
-    parameters: {
-      result_format: 'text',
-      temperature: 0.7,
-      max_tokens: maxTokens,
-    },
+    messages,
+    temperature: 0.7,
+    max_tokens: maxTokens,
   });
 
   return new Promise((resolve, reject) => {
-    const url = new URL(DASHSCOPE_URL);
+    const url = new URL(DEEPSEEK_URL);
     const options = {
       hostname: url.hostname,
       path: url.pathname,
@@ -61,10 +56,10 @@ export async function callQwen(
       res.on('end', () => {
         try {
           const response = JSON.parse(data);
-          if (response.output?.text) {
-            resolve(response.output.text);
-          } else if (response.message) {
-            reject(new Error(`Qwen API error: ${response.message}`));
+          if (response.choices?.[0]?.message?.content) {
+            resolve(response.choices[0].message.content);
+          } else if (response.error?.message) {
+            reject(new Error(`DeepSeek API error: ${response.error.message}`));
           } else {
             reject(new Error(`Unexpected response: ${data}`));
           }
@@ -110,5 +105,5 @@ ${projectAnalysis}
     },
   ];
 
-  return callQwen(messages, 'qwen-max', maxTokens);
+  return callQwen(messages, 'deepseek-chat', maxTokens);
 }
