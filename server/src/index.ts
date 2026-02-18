@@ -13,6 +13,7 @@ import historyRouter from './routes/history';
 import modelsRouter from './routes/models';
 import exportRouter from './routes/export';
 import trendsRouter from './routes/trends';
+import evolutionRouter from './routes/evolution';
 import { initWebSocket } from './ws/progress';
 
 const app = express();
@@ -27,6 +28,7 @@ app.use('/api/history', historyRouter);
 app.use('/api/models', modelsRouter);
 app.use('/api/export', exportRouter);
 app.use('/api/trends', trendsRouter);
+app.use('/api/evolution', evolutionRouter);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });

@@ -3,13 +3,14 @@ import { Layout, Menu } from 'antd';
 import {
   DashboardOutlined,
   PlayCircleOutlined,
-  FileTextOutlined,
   HistoryOutlined,
+  ExperimentOutlined,
 } from '@ant-design/icons';
 import Dashboard from './pages/Dashboard';
 import Evaluate from './pages/Evaluate';
 import Report from './pages/Report';
 import History from './pages/History';
+import Evolution from './pages/Evolution';
 
 const { Header, Sider, Content } = Layout;
 
@@ -20,6 +21,7 @@ function AppLayout() {
     { key: '/', icon: <DashboardOutlined />, label: <Link to="/">仪表盘</Link> },
     { key: '/evaluate', icon: <PlayCircleOutlined />, label: <Link to="/evaluate">发起评测</Link> },
     { key: '/history', icon: <HistoryOutlined />, label: <Link to="/history">历史记录</Link> },
+    { key: '/evolution', icon: <ExperimentOutlined />, label: <Link to="/evolution">角色进化</Link> },
   ];
 
   return (
@@ -45,6 +47,7 @@ function AppLayout() {
             <Route path="/evaluate" element={<Evaluate />} />
             <Route path="/report/:id" element={<Report />} />
             <Route path="/history" element={<History />} />
+            <Route path="/evolution" element={<Evolution />} />
           </Routes>
         </Content>
       </Layout>

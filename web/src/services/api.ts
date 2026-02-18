@@ -52,4 +52,76 @@ export const evaluationApi = {
   deleteEvaluation: (id: string) => api.delete(`/history/${id}`),
 };
 
+// Evolution API types
+export interface ReflectionRecord {
+  id: string;
+  evaluationId: string;
+  timestamp: string;
+  roleAssessments: Array<{
+    role: string;
+    qualityScore: number;
+    strengths: string[];
+    weaknesses: string[];
+    promptSuggestions: string[];
+    redundancyWith: string[];
+  }>;
+  blindSpots: string[];
+  newRoleProposals: Array<{
+    id: string;
+    label: string;
+    emoji: string;
+    rationale: string;
+    draftPromptSketch: string;
+  }>;
+  metaObservations: string;
+}
+
+export interface SynthesisRecord {
+  id: string;
+  version: string;
+  generatedAt: string;
+  promptDiffs: Array<{
+    role: string;
+    suggestedAdditions: string[];
+    suggestedRemovals: string[];
+    rewrittenPrompt: string;
+    confidence: number;
+    evidenceCount: number;
+  }>;
+  newRoles: Array<{
+    id: string;
+    label: string;
+    emoji: string;
+    category: string;
+    standardPrompt: string;
+    launchReadyPrompt: string;
+    proposalCount: number;
+    confidence: number;
+  }>;
+  retireCandidates: Array<{
+    role: string;
+    reason: string;
+  }>;
+  appliedAt?: string;
+}
+
+export interface EvolutionStats {
+  reflectionCount: number;
+  synthesisCount: number;
+  averageRoleQuality: Record<string, number>;
+  topBlindSpots: Array<{ spot: string; count: number }>;
+  topNewRoleProposals: Array<{ id: string; count: number }>;
+  needsSynthesis: boolean;
+}
+
+export const evolutionApi = {
+  listReflections: () => api.get<{ count: number; total: number; reflections: ReflectionRecord[] }>('/evolution/reflections'),
+  getReflection: (evaluationId: string) => api.get<ReflectionRecord>(`/evolution/reflections/${evaluationId}`),
+  triggerSynthesis: () => api.post<SynthesisRecord>('/evolution/synthesize'),
+  getLatestSynthesis: () => api.get<SynthesisRecord>('/evolution/latest-synthesis'),
+  listSyntheses: () => api.get<{ count: number; syntheses: SynthesisRecord[] }>('/evolution/syntheses'),
+  applySynthesis: (synthesisId: string) => api.post(`/evolution/apply/${synthesisId}`),
+  getStats: () => api.get<EvolutionStats>('/evolution/stats'),
+};
+
 export default api;

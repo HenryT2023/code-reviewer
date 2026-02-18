@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Card, Row, Col, Tabs, Tag, List, Spin, Button, Descriptions, Progress, Typography } from 'antd';
+import { Card, Row, Col, Tabs, Tag, List, Spin, Button, Descriptions, Progress, Typography, Alert } from 'antd';
 import { ArrowLeftOutlined, DownloadOutlined } from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
-import { evaluationApi, EvaluationRecord } from '../services/api';
+import { evaluationApi, evolutionApi, EvaluationRecord, ReflectionRecord } from '../services/api';
 
 const { Text } = Typography;
 
@@ -11,11 +11,13 @@ const Report = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [evaluation, setEvaluation] = useState<EvaluationRecord | null>(null);
+  const [reflection, setReflection] = useState<ReflectionRecord | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (id) {
       loadEvaluation(id);
+      loadReflection(id);
     }
   }, [id]);
 
@@ -27,6 +29,15 @@ const Report = () => {
       console.error('Failed to load evaluation:', error);
     }
     setLoading(false);
+  };
+
+  const loadReflection = async (evalId: string) => {
+    try {
+      const res = await evolutionApi.getReflection(evalId);
+      setReflection(res.data);
+    } catch {
+      // Reflection may not exist yet
+    }
   };
 
   const getRadarOption = () => {
@@ -201,6 +212,89 @@ const Report = () => {
             />
           </Card>
         )}
+      </div>
+    );
+  };
+
+  const renderReflectionTab = () => {
+    if (!reflection) {
+      return (
+        <Alert
+          type="info"
+          message="反思数据尚未生成"
+          description="评测完成后会自动运行角色自进化反思，请稍后刷新查看。"
+        />
+      );
+    }
+
+    return (
+      <div>
+        <Card title="📊 角色质量评估" style={{ marginBottom: 16 }}>
+          {reflection.roleAssessments.map(a => (
+            <Card key={a.role} size="small" style={{ marginBottom: 8 }} title={
+              <span>
+                {getRoleName(a.role)}
+                <Tag color={a.qualityScore >= 80 ? 'green' : a.qualityScore >= 60 ? 'orange' : 'red'} style={{ marginLeft: 8 }}>
+                  质量: {a.qualityScore}分
+                </Tag>
+              </span>
+            }>
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Text strong style={{ color: '#52c41a' }}>✅ 优点</Text>
+                  <List size="small" dataSource={a.strengths} renderItem={(item: string) => <List.Item>{item}</List.Item>} />
+                </Col>
+                <Col span={12}>
+                  <Text strong style={{ color: '#f5222d' }}>❌ 缺点</Text>
+                  <List size="small" dataSource={a.weaknesses} renderItem={(item: string) => <List.Item>{item}</List.Item>} />
+                </Col>
+              </Row>
+              {a.promptSuggestions.length > 0 && (
+                <div style={{ marginTop: 12 }}>
+                  <Text strong style={{ color: '#1890ff' }}>💡 Prompt 改进建议</Text>
+                  <List size="small" dataSource={a.promptSuggestions} renderItem={(item: string) => <List.Item>{item}</List.Item>} />
+                </div>
+              )}
+              {a.redundancyWith.length > 0 && (
+                <div style={{ marginTop: 8 }}>
+                  <Text type="warning">⚠️ 与以下角色有重复: {a.redundancyWith.join(', ')}</Text>
+                </div>
+              )}
+            </Card>
+          ))}
+        </Card>
+
+        {reflection.blindSpots.length > 0 && (
+          <Card title="🔍 评测盲区" style={{ marginBottom: 16 }}>
+            <List
+              size="small"
+              dataSource={reflection.blindSpots}
+              renderItem={(item: string) => (
+                <List.Item>
+                  <Tag color="orange">{item}</Tag>
+                </List.Item>
+              )}
+            />
+          </Card>
+        )}
+
+        {reflection.newRoleProposals.length > 0 && (
+          <Card title="🆕 新角色提议" style={{ marginBottom: 16 }}>
+            {reflection.newRoleProposals.map(p => (
+              <Card key={p.id} size="small" style={{ marginBottom: 8 }} title={`${p.emoji} ${p.label} (${p.id})`}>
+                <p><Text strong>提议理由:</Text> {p.rationale}</p>
+                <p><Text strong>Prompt 草稿:</Text></p>
+                <pre style={{ fontSize: 12, background: '#f5f5f5', padding: 8, borderRadius: 4, whiteSpace: 'pre-wrap' }}>
+                  {p.draftPromptSketch}
+                </pre>
+              </Card>
+            ))}
+          </Card>
+        )}
+
+        <Card title="📝 元观察">
+          <p>{reflection.metaObservations}</p>
+        </Card>
       </div>
     );
   };
@@ -394,6 +488,11 @@ const Report = () => {
       label: '🎯 Launch-Ready',
       children: renderOrchestratorTab(orchestratorRole),
     }] : []),
+    {
+      key: '_reflection',
+      label: '🧬 角色反思',
+      children: renderReflectionTab(),
+    },
   ];
 
   return (

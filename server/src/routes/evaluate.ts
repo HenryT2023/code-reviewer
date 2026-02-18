@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { analyzeProject } from '../analyzers';
 import { evaluateWithRole } from '../ai/qwen';
 import { runDebateRound, runOrchestrator } from '../ai/orchestrator';
+import { runReflection } from '../ai/role-evolution';
 import type { RoleResult, LaunchContext } from '../ai/orchestrator';
 import {
   createEvaluation,
@@ -10,6 +11,8 @@ import {
   saveRoleEvaluation,
   getEvaluation,
   getRoleEvaluations,
+  saveReflection,
+  getReflection,
 } from '../db/sqlite';
 import {
   emitStarted,
@@ -20,6 +23,7 @@ import {
   emitFailed,
   emitDebating,
   emitOrchestrating,
+  emitReflecting,
 } from '../ws/progress';
 
 const router = Router();
@@ -160,10 +164,57 @@ async function runEvaluation(
     completeEvaluation(evaluationId, overallScore);
     emitCompleted(evaluationId, overallScore);
     console.log(`[${evaluationId}] Evaluation completed with score: ${overallScore}`);
+
+    // Phase 3: Reflection (non-blocking, runs after completion)
+    if (roleResults.length > 0) {
+      runReflectionPhase(evaluationId, roleResults).catch(err => {
+        console.error(`[${evaluationId}] Reflection failed:`, err);
+      });
+    }
   } catch (error) {
     console.error('Evaluation failed:', error);
     updateEvaluationStatus(evaluationId, 'failed');
     emitFailed(evaluationId, String(error));
+  }
+}
+
+async function runReflectionPhase(
+  evaluationId: string,
+  roleResults: RoleResult[],
+  debateSummary?: string
+) {
+  try {
+    console.log(`[${evaluationId}] Starting reflection phase...`);
+    emitReflecting(evaluationId);
+
+    const reflection = await runReflection(evaluationId, roleResults, debateSummary);
+
+    // Convert to storage format
+    saveReflection({
+      evaluationId,
+      timestamp: reflection.timestamp,
+      roleAssessments: reflection.role_assessments.map(a => ({
+        role: a.role,
+        qualityScore: a.quality_score,
+        strengths: a.strengths,
+        weaknesses: a.weaknesses,
+        promptSuggestions: a.prompt_suggestions,
+        redundancyWith: a.redundancy_with,
+      })),
+      blindSpots: reflection.blind_spots,
+      newRoleProposals: reflection.new_role_proposals.map(p => ({
+        id: p.id,
+        label: p.label,
+        emoji: p.emoji,
+        rationale: p.rationale,
+        draftPromptSketch: p.draft_prompt_sketch,
+      })),
+      metaObservations: reflection.meta_observations,
+    });
+
+    console.log(`[${evaluationId}] Reflection complete: ${reflection.role_assessments.length} assessments, ${reflection.blind_spots.length} blind spots, ${reflection.new_role_proposals.length} new role proposals`);
+  } catch (error) {
+    console.error(`[${evaluationId}] Reflection error:`, error);
   }
 }
 
