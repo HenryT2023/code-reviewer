@@ -83,6 +83,7 @@ const Report = () => {
       pricing: '💰 定价策略',
       data_metrics: '📊 数据与指标',
       delivery: '🚀 交付经理',
+      artist: '🎨 体验设计',
       _debate: '🔴 对喷摘要',
       _orchestrator: '🎯 Launch-Ready 报告',
     };

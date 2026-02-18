@@ -95,6 +95,7 @@ const ROLE_DISPLAY_NAMES: Record<string, string> = {
   pricing: '定价策略',
   data_metrics: '数据与指标',
   delivery: '交付经理',
+  artist: '体验设计',
   _debate: '对喷辩论',
   _orchestrator: '总控合成',
 };

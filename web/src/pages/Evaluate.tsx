@@ -17,7 +17,7 @@ const { Text } = Typography;
 const PRESETS_KEY = 'code-reviewer-role-presets';
 const ROLES_STORAGE_KEY = 'code-reviewer-selected-roles';
 
-const ALL_ROLE_KEYS = ['boss', 'merchant', 'operator', 'architect', 'growth', 'skeptic', 'pricing', 'data_metrics', 'delivery'];
+const ALL_ROLE_KEYS = ['boss', 'merchant', 'operator', 'architect', 'growth', 'skeptic', 'pricing', 'data_metrics', 'delivery', 'artist'];
 const PRIMARY_ROLE_KEYS = ['boss', 'merchant', 'operator', 'architect'];
 const RECOMMENDED_ROLES = ['boss', 'merchant', 'architect'];
 const DEFAULT_ROLES = ['boss', 'merchant', 'operator', 'architect'];
@@ -68,6 +68,7 @@ const ROLE_LABELS: Record<string, string> = {
   pricing: '💰 定价策略',
   data_metrics: '📊 数据与指标',
   delivery: '🚀 交付经理',
+  artist: '🎨 体验设计',
 };
 
 function loadPresets(): RolePreset[] {
@@ -108,6 +109,7 @@ const Evaluate = () => {
     { label: '💰 定价策略 (商业化)', value: 'pricing' },
     { label: '📊 数据与指标 (埋点/看板)', value: 'data_metrics' },
     { label: '🚀 交付经理 (项目管理)', value: 'delivery' },
+    { label: '🎨 体验设计 (美学/情感)', value: 'artist' },
   ];
 
   const evaluationMode = Form.useWatch('mode', form) || 'standard';
