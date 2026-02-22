@@ -27,6 +27,7 @@ import {
 } from '../db/sqlite';
 import { isMrepEnabledRole, extractMrepFromRoleOutput, verifyMrepReport } from '../mrep';
 import { getOrBuildReference, runGroundedJudge, formatJudgmentSummary } from '../grounded-judge';
+import { generateMarkdownReport, saveReportToProject } from '../reports';
 import {
   emitStarted,
   emitAnalyzing,
@@ -336,6 +337,46 @@ async function runEvaluation(
     completeEvaluation(evaluationId, overallScore);
     emitCompleted(evaluationId, overallScore);
     console.log(`[${evaluationId}] Evaluation completed with score: ${overallScore}`);
+
+    // Generate and save Markdown report to project folder
+    try {
+      const reportData = {
+        evaluationId,
+        projectName,
+        projectPath,
+        overallScore,
+        roleEvaluations: roleResults.map(r => ({
+          role: r.role,
+          score: r.score,
+          summary: r.summary,
+          details: r.details,
+        })),
+        analysisData: {
+          structure: {
+            totalFiles: analysis.structure?.totalFiles,
+            totalLines: analysis.structure?.totalLines,
+            languages: analysis.structure?.languages,
+          },
+          api: {
+            totalEndpoints: analysis.api?.totalEndpoints,
+          },
+          database: {
+            totalEntities: analysis.database?.totalEntities,
+            totalColumns: analysis.database?.totalColumns,
+            orms: analysis.database?.orms,
+          },
+          quality: analysis.quality,
+        },
+        depth,
+        mode,
+        evaluationType,
+        timestamp: new Date(),
+      };
+      const reportContent = generateMarkdownReport(reportData);
+      await saveReportToProject(projectPath, reportContent, evaluationId);
+    } catch (reportErr) {
+      console.error(`[${evaluationId}] Failed to generate report:`, reportErr);
+    }
 
     // Phase 3: Reflection + Grounded Judge (non-blocking, parallel)
     if (roleResults.length > 0) {
