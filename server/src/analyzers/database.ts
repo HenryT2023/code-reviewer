@@ -126,7 +126,7 @@ async function analyzeTypeOrmEntities(projectPath: string): Promise<EntityInfo[]
   return entities;
 }
 
-// --- SQLAlchemy ---
+// --- SQLAlchemy / SQLModel ---
 async function analyzeSqlAlchemyModels(projectPath: string): Promise<EntityInfo[]> {
   const entities: EntityInfo[] = [];
   const pyFiles = await glob('**/models*.py', {
@@ -140,16 +140,24 @@ async function analyzeSqlAlchemyModels(projectPath: string): Promise<EntityInfo[
     ignore: ['**/node_modules/**', '**/.venv/**', '**/venv/**', '**/__pycache__/**', '**/migrations/**', '**/alembic/**'],
   });
 
-  const allFiles = [...new Set([...pyFiles, ...modelDirFiles])];
+  // Check db/ directory pattern (common in FastAPI projects)
+  const dbDirFiles = await glob('**/db/**/*.py', {
+    cwd: projectPath,
+    ignore: ['**/node_modules/**', '**/.venv/**', '**/venv/**', '**/__pycache__/**', '**/migrations/**', '**/alembic/**'],
+  });
+
+  const allFiles = [...new Set([...pyFiles, ...modelDirFiles, ...dbDirFiles])];
 
   for (const file of allFiles) {
     const filePath = path.join(projectPath, file);
     try {
       const content = fs.readFileSync(filePath, 'utf-8');
-      if (!content.includes('Column') && !content.includes('mapped_column') && !content.includes('Mapped')) continue;
+      // Check for SQLAlchemy or SQLModel indicators
+      if (!content.includes('Column') && !content.includes('mapped_column') && !content.includes('Mapped') 
+          && !content.includes('SQLModel') && !content.includes('Field(')) continue;
 
-      // Match class Xxx(Base) or class Xxx(db.Model) patterns
-      const classPattern = /class\s+(\w+)\s*\([^)]*(?:Base|Model|DeclarativeBase|db\.Model)[^)]*\)\s*:/g;
+      // Match class Xxx(Base), class Xxx(db.Model), or class Xxx(SQLModel, table=True) patterns
+      const classPattern = /class\s+(\w+)\s*\([^)]*(?:Base|Model|DeclarativeBase|db\.Model|SQLModel)[^)]*\)\s*:/g;
       let classMatch;
       while ((classMatch = classPattern.exec(content)) !== null) {
         const className = classMatch[1];
@@ -187,6 +195,25 @@ async function analyzeSqlAlchemyModels(projectPath: string): Promise<EntityInfo[
             nullable: opts.includes('nullable=True') || !opts.includes('nullable=False'),
             primary: opts.includes('primary_key=True') || opts.includes('primary_key'),
           });
+        }
+
+        // SQLModel style: field: type = Field(...) or field: Optional[type] = Field(...)
+        const sqlmodelPattern = /(\w+)\s*:\s*(Optional\[)?(\w+)\]?\s*=\s*Field\(([^)]*)\)/g;
+        while ((colMatch = sqlmodelPattern.exec(classBody)) !== null) {
+          const opts = colMatch[4] || '';
+          const isOptional = !!colMatch[2];
+          columns.push({
+            name: colMatch[1], 
+            type: colMatch[3],
+            nullable: isOptional || opts.includes('default=None') || opts.includes('nullable=True'),
+            primary: opts.includes('primary_key=True') || opts.includes('primary_key'),
+          });
+        }
+
+        // SQLModel Relationship style: field: List["Target"] = Relationship(back_populates="xxx")
+        const sqlmodelRelPattern = /(\w+)\s*:\s*(?:List\[)?["']?(\w+)["']?\]?\s*=\s*Relationship\(/g;
+        while ((colMatch = sqlmodelRelPattern.exec(classBody)) !== null) {
+          relations.push({ type: 'OneToMany', target: colMatch[2], field: colMatch[1] });
         }
 
         // Relationships
