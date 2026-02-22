@@ -217,6 +217,162 @@ const Report = () => {
     );
   };
 
+  const renderRuntimeTab = () => {
+    // Get runtime stages from evaluation record
+    const runtimeStages = evaluation?.runtimeStages || [];
+
+    if (!runtimeStages || runtimeStages.length === 0) {
+      return (
+        <Alert
+          type="info"
+          message="无运行时评测数据"
+          description="本次评测未包含动态/UI评测。如需运行时评测，请在发起评测时选择「动态评测」或「完整评测」。"
+        />
+      );
+    }
+
+    const getStageIcon = (status: string) => {
+      switch (status) {
+        case 'passed': return '✅';
+        case 'failed': return '❌';
+        case 'skipped': return '⏭️';
+        default: return '⚪';
+      }
+    };
+
+    const getStageColor = (status: string) => {
+      switch (status) {
+        case 'passed': return 'green';
+        case 'failed': return 'red';
+        case 'skipped': return 'default';
+        default: return 'blue';
+      }
+    };
+
+    const stageTitles: Record<string, string> = {
+      startup: '🚀 应用启动',
+      health: '💓 健康检查',
+      api: '🔌 API 测试',
+      ui: '🎭 UI 评测',
+    };
+
+    return (
+      <div>
+        <Card title="运行时评测概览" style={{ marginBottom: 16 }}>
+          <Row gutter={16}>
+            {runtimeStages.map((stage, index) => (
+              <Col span={6} key={index}>
+                <Card size="small">
+                  <div style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: 24, marginBottom: 8 }}>
+                      {getStageIcon(stage.status)}
+                    </div>
+                    <div style={{ fontWeight: 'bold', marginBottom: 4 }}>
+                      {stageTitles[stage.stage] || stage.stage}
+                    </div>
+                    <Tag color={getStageColor(stage.status)}>
+                      {stage.status}
+                    </Tag>
+                    <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
+                      {stage.duration_ms}ms
+                    </div>
+                    {stage.score !== undefined && (
+                      <Progress 
+                        percent={stage.score} 
+                        size="small" 
+                        style={{ marginTop: 8 }}
+                        strokeColor={stage.score >= 80 ? '#52c41a' : stage.score >= 60 ? '#faad14' : '#f5222d'}
+                      />
+                    )}
+                  </div>
+                </Card>
+              </Col>
+            ))}
+          </Row>
+        </Card>
+
+        {runtimeStages.some(s => s.errors && s.errors.length > 0) && (
+          <Card title="❌ 错误日志" style={{ marginBottom: 16 }}>
+            <List
+              size="small"
+              dataSource={runtimeStages.flatMap(s => (s.errors || []).map(e => ({ stage: s.stage, error: e })))}
+              renderItem={(item: { stage: string; error: string }) => (
+                <List.Item>
+                  <Tag color="red">{stageTitles[item.stage] || item.stage}</Tag>
+                  <Text type="danger">{item.error}</Text>
+                </List.Item>
+              )}
+            />
+          </Card>
+        )}
+
+        {runtimeStages.filter(s => s.stage === 'api' && s.details).map((stage, index) => {
+          const apiDetails = stage.details as { results?: Array<{ endpoint: string; method: string; status: number; passed: boolean }> };
+          if (!apiDetails.results) return null;
+          return (
+            <Card key={index} title="🔌 API 测试详情" style={{ marginBottom: 16 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid #f0f0f0' }}>
+                    <th style={{ padding: 8, textAlign: 'left' }}>端点</th>
+                    <th style={{ padding: 8, textAlign: 'left' }}>方法</th>
+                    <th style={{ padding: 8, textAlign: 'left' }}>状态码</th>
+                    <th style={{ padding: 8, textAlign: 'left' }}>结果</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {apiDetails.results.map((r, i) => (
+                    <tr key={i} style={{ borderBottom: '1px solid #f0f0f0' }}>
+                      <td style={{ padding: 8 }}>{r.endpoint}</td>
+                      <td style={{ padding: 8 }}><Tag>{r.method}</Tag></td>
+                      <td style={{ padding: 8 }}>{r.status}</td>
+                      <td style={{ padding: 8 }}>
+                        <Tag color={r.passed ? 'green' : 'red'}>
+                          {r.passed ? '通过' : '失败'}
+                        </Tag>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Card>
+          );
+        })}
+
+        {runtimeStages.filter(s => s.stage === 'ui' && s.details).map((stage, index) => {
+          const uiDetails = stage.details as { flows?: Array<{ name: string; passed: boolean; steps?: Array<{ action: string; passed: boolean }> }> };
+          if (!uiDetails.flows) return null;
+          return (
+            <Card key={index} title="🎭 UI 测试详情" style={{ marginBottom: 16 }}>
+              {uiDetails.flows.map((flow, fi) => (
+                <Card key={fi} size="small" style={{ marginBottom: 8 }} title={
+                  <span>
+                    {flow.name}
+                    <Tag color={flow.passed ? 'green' : 'red'} style={{ marginLeft: 8 }}>
+                      {flow.passed ? '通过' : '失败'}
+                    </Tag>
+                  </span>
+                }>
+                  {flow.steps && (
+                    <List
+                      size="small"
+                      dataSource={flow.steps}
+                      renderItem={(step: { action: string; passed: boolean }) => (
+                        <List.Item>
+                          {step.passed ? '✅' : '❌'} {step.action}
+                        </List.Item>
+                      )}
+                    />
+                  )}
+                </Card>
+              ))}
+            </Card>
+          );
+        })}
+      </div>
+    );
+  };
+
   const renderReflectionTab = () => {
     if (!reflection) {
       return (
@@ -474,6 +630,11 @@ const Report = () => {
   const orchestratorRole = evaluation.roleEvaluations?.find(r => r.role === '_orchestrator');
 
   const tabItems = [
+    {
+      key: '_runtime',
+      label: '🚀 运行时评测',
+      children: renderRuntimeTab(),
+    },
     ...regularRoles.map(role => ({
       key: role.role,
       label: getRoleName(role.role),

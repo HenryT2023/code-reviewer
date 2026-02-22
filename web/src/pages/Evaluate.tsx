@@ -163,6 +163,7 @@ const Evaluate = () => {
     context: string;
     depth: string;
     mode: string;
+    evaluationType?: string;
     launchWindow?: string;
     launchChannels?: string;
     launchConstraints?: string;
@@ -188,6 +189,7 @@ const Evaluate = () => {
       context: values.context || '',
       depth: values.depth || 'quick',
       mode: values.mode || 'standard',
+      evaluationType: values.evaluationType || 'static',
       ...(Object.keys(promptsToSend).length > 0 ? { rolePrompts: promptsToSend } : {}),
     };
 
@@ -267,6 +269,7 @@ const Evaluate = () => {
             initialValues={{
               roles: loadSavedRoles(),
               mode: 'standard',
+              evaluationType: 'static',
               projectPath: '/Users/hal/DDT-Monodt',
               projectName: 'DDT-Monodt',
               context: 'DDT+ 数字孪生仓库管理操作系统（Monorepo），包含 WMS 后端(Python FastAPI)、WMS 前端(React)、ControlPlane 智能体操作系统、TradeOS 合规接口等子服务。面向香港分销行业，提供事件驱动的仓库管理和AI辅助运营。采用 Agent-First 三层架构（Agent Swarm → Skills → Case/Workflow），12 个 Skills、6 个 DomainAgents、24+ 意图路由、170 个自动化测试。',
@@ -321,6 +324,33 @@ const Evaluate = () => {
                 </Radio.Button>
                 <Radio.Button value="deep">
                   <SearchOutlined /> 深度评测
+                </Radio.Button>
+              </Radio.Group>
+            </Form.Item>
+
+            <Form.Item
+              name="evaluationType"
+              label={
+                <span>
+                  评测类型&nbsp;
+                  <Tooltip title="静态分析仅分析代码；动态评测会启动应用并测试API；UI评测会使用Playwright测试界面；完整评测包含所有类型">
+                    <ExperimentOutlined />
+                  </Tooltip>
+                </span>
+              }
+            >
+              <Radio.Group>
+                <Radio.Button value="static">
+                  📊 静态分析
+                </Radio.Button>
+                <Radio.Button value="dynamic">
+                  🚀 动态评测
+                </Radio.Button>
+                <Radio.Button value="ui">
+                  🎭 UI 评测
+                </Radio.Button>
+                <Radio.Button value="full">
+                  ⚡ 完整评测
                 </Radio.Button>
               </Radio.Group>
             </Form.Item>

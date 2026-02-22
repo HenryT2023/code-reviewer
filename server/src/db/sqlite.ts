@@ -9,7 +9,9 @@ export interface EvaluationRecord {
   context: string;
   overallScore: number | null;
   status: 'pending' | 'analyzing' | 'evaluating' | 'completed' | 'failed';
+  evaluationType: 'static' | 'dynamic' | 'ui' | 'full';
   analysisData: string | null;
+  runtimeStages: string | null;
   createdAt: string;
   completedAt: string | null;
 }
@@ -149,7 +151,8 @@ loadEvolutionData();
 export function createEvaluation(
   projectName: string,
   projectPath: string,
-  context: string
+  context: string,
+  evaluationType: EvaluationRecord['evaluationType'] = 'static'
 ): string {
   const id = uuidv4();
   const record: EvaluationRecord = {
@@ -159,7 +162,9 @@ export function createEvaluation(
     context,
     overallScore: null,
     status: 'pending',
+    evaluationType,
     analysisData: null,
+    runtimeStages: null,
     createdAt: new Date().toISOString(),
     completedAt: null,
   };
@@ -190,6 +195,14 @@ export function completeEvaluation(id: string, overallScore: number) {
     record.status = 'completed';
     record.overallScore = overallScore;
     record.completedAt = new Date().toISOString();
+    saveData();
+  }
+}
+
+export function updateRuntimeStages(id: string, runtimeStages: string) {
+  const record = evaluations.get(id);
+  if (record) {
+    record.runtimeStages = runtimeStages;
     saveData();
   }
 }

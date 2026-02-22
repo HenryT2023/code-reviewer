@@ -4,6 +4,11 @@ import { evaluateWithRole } from '../ai/qwen';
 import { runDebateRound, runOrchestrator } from '../ai/orchestrator';
 import { runReflection } from '../ai/role-evolution';
 import type { RoleResult, LaunchContext } from '../ai/orchestrator';
+import { runRuntimeEvaluation } from '../eval/runtime';
+import { runUiEvaluation } from '../eval/ui';
+import { detectMonorepoPorts } from '../eval/detectors/project';
+import type { EvaluationType, StageResult, EvalConfig } from '../eval/types';
+import { DEFAULT_TIMEOUT } from '../eval/types';
 import {
   createEvaluation,
   updateEvaluationStatus,
@@ -13,6 +18,7 @@ import {
   getRoleEvaluations,
   saveReflection,
   getReflection,
+  updateRuntimeStages,
 } from '../db/sqlite';
 import {
   emitStarted,
@@ -24,6 +30,8 @@ import {
   emitDebating,
   emitOrchestrating,
   emitReflecting,
+  emitRuntimeTesting,
+  emitUiTesting,
 } from '../ws/progress';
 
 const router = Router();
@@ -35,13 +43,14 @@ interface EvaluateRequest {
   context: string;
   depth: 'quick' | 'deep';
   mode?: 'standard' | 'launch-ready';
+  evaluationType?: EvaluationType;
   launchContext?: LaunchContext;
   rolePrompts?: Record<string, string>;
 }
 
 router.post('/', async (req: Request, res: Response) => {
   try {
-    const { projectPath, projectName, roles, context, depth, mode, launchContext, rolePrompts } = req.body as EvaluateRequest;
+    const { projectPath, projectName, roles, context, depth, mode, evaluationType, launchContext, rolePrompts } = req.body as EvaluateRequest;
 
     if (!projectPath || !projectName) {
       return res.status(400).json({ error: 'projectPath and projectName are required' });
@@ -50,11 +59,12 @@ router.post('/', async (req: Request, res: Response) => {
     const selectedRoles = roles || ['boss', 'merchant', 'operator'];
     const selectedDepth = depth || 'quick';
     const selectedMode = mode || 'standard';
-    const evaluationId = createEvaluation(projectName, projectPath, context || '');
+    const selectedEvalType = evaluationType || 'static';
+    const evaluationId = createEvaluation(projectName, projectPath, context || '', selectedEvalType);
 
-    res.json({ id: evaluationId, status: 'started', depth: selectedDepth, mode: selectedMode });
+    res.json({ id: evaluationId, status: 'started', depth: selectedDepth, mode: selectedMode, evaluationType: selectedEvalType });
 
-    runEvaluation(evaluationId, projectPath, projectName, selectedRoles, context || '', selectedDepth, selectedMode, launchContext, rolePrompts).catch(console.error);
+    runEvaluation(evaluationId, projectPath, projectName, selectedRoles, context || '', selectedDepth, selectedMode, selectedEvalType, launchContext, rolePrompts).catch(console.error);
   } catch (error) {
     console.error('Evaluation error:', error);
     res.status(500).json({ error: 'Failed to start evaluation' });
@@ -76,6 +86,130 @@ function parseRoleResult(raw: string): { score: number; summary: string; parsed:
   return { score: parsed.score || 70, summary: parsed.summary || '', parsed };
 }
 
+interface DynamicUiEvalResult {
+  context: string;
+  process?: { kill: () => Promise<void> };
+  stages: StageResult[];
+}
+
+async function runDynamicUiEvaluation(
+  evaluationId: string,
+  projectPath: string,
+  evaluationType: EvaluationType
+): Promise<DynamicUiEvalResult> {
+  const config: EvalConfig = {
+    projectPath,
+    evaluationType,
+    timeout: DEFAULT_TIMEOUT,
+  };
+
+  const stages: StageResult[] = [];
+  let runtimeProcess: { kill: () => Promise<void> } | undefined;
+  let runtimeContext = '';
+
+  try {
+    // Run runtime evaluation for dynamic, ui, or full
+    if (evaluationType === 'dynamic' || evaluationType === 'full' || evaluationType === 'ui') {
+      console.log(`[${evaluationId}] Running runtime evaluation...`);
+      emitRuntimeTesting(evaluationId, 'startup');
+      
+      const runtimeResult = await runRuntimeEvaluation(config);
+      stages.push(...runtimeResult.stages);
+      runtimeProcess = runtimeResult.process;
+
+      // Format runtime context for role evaluation
+      runtimeContext = formatRuntimeContext(runtimeResult);
+
+      // Run UI evaluation for ui or full
+      if ((evaluationType === 'ui' || evaluationType === 'full') && runtimeResult.success) {
+        console.log(`[${evaluationId}] Running UI evaluation...`);
+        emitUiTesting(evaluationId, 'generic-flow');
+
+        // Detect frontend port for monorepo
+        const ports = detectMonorepoPorts(projectPath);
+        const uiBaseUrl = ports.frontend 
+          ? `http://localhost:${ports.frontend}` 
+          : runtimeResult.baseUrl;
+
+        // Wait for frontend if different from backend
+        if (ports.frontend && ports.frontend !== ports.backend) {
+          const { waitForHealthy } = await import('../eval/runtime/health');
+          await waitForHealthy(uiBaseUrl, 10000);
+        }
+
+        const uiResult = await runUiEvaluation(config, uiBaseUrl);
+        stages.push(uiResult.stage);
+
+        // Append UI context
+        runtimeContext += formatUiContext(uiResult);
+      }
+    }
+  } catch (error) {
+    console.error(`[${evaluationId}] Dynamic/UI evaluation error:`, error);
+    runtimeContext = `\n## 运行时评测\n评测失败: ${String(error)}`;
+  }
+
+  // Save runtime stages to database
+  if (stages.length > 0) {
+    updateRuntimeStages(evaluationId, JSON.stringify(stages));
+  }
+
+  return { context: runtimeContext, process: runtimeProcess, stages };
+}
+
+function formatRuntimeContext(runtimeResult: {
+  success: boolean;
+  stages: StageResult[];
+  baseUrl: string;
+}): string {
+  const startupStage = runtimeResult.stages.find(s => s.stage === 'startup');
+  const healthStage = runtimeResult.stages.find(s => s.stage === 'health');
+  const apiStage = runtimeResult.stages.find(s => s.stage === 'api');
+
+  let context = `\n## 运行时评测结果\n`;
+  context += `- 启动状态: ${startupStage?.status || 'N/A'} (${startupStage?.duration_ms || 0}ms)\n`;
+  context += `- 健康检查: ${healthStage?.status || 'N/A'}\n`;
+  
+  if (apiStage) {
+    const apiDetails = apiStage.details as { passed?: number; total?: number };
+    context += `- API 测试: ${apiDetails.passed || 0}/${apiDetails.total || 0} 通过\n`;
+  }
+
+  if (runtimeResult.stages.some(s => s.errors.length > 0)) {
+    context += `- 错误: ${runtimeResult.stages.flatMap(s => s.errors).join('; ')}\n`;
+  }
+
+  return context;
+}
+
+function formatUiContext(uiResult: { stage: StageResult }): string {
+  const stage = uiResult.stage;
+  const details = stage.details as {
+    flows?: Array<{ name: string; passed: boolean; console_errors?: string[]; network_errors?: string[] }>;
+  };
+
+  let context = `\n## UI 评测结果\n`;
+  context += `- 状态: ${stage.status} (${stage.duration_ms}ms)\n`;
+  
+  if (details.flows) {
+    for (const flow of details.flows) {
+      context += `- ${flow.name}: ${flow.passed ? '通过' : '失败'}\n`;
+      if (flow.console_errors?.length) {
+        context += `  - 控制台错误: ${flow.console_errors.length}\n`;
+      }
+      if (flow.network_errors?.length) {
+        context += `  - 网络错误: ${flow.network_errors.length}\n`;
+      }
+    }
+  }
+
+  if (stage.errors.length > 0) {
+    context += `- 错误: ${stage.errors.join('; ')}\n`;
+  }
+
+  return context;
+}
+
 async function runEvaluation(
   evaluationId: string,
   projectPath: string,
@@ -84,19 +218,30 @@ async function runEvaluation(
   context: string,
   depth: 'quick' | 'deep',
   mode: 'standard' | 'launch-ready' = 'standard',
+  evaluationType: EvaluationType = 'static',
   launchContext?: LaunchContext,
   rolePrompts?: Record<string, string>
 ) {
+  let runtimeProcess: { kill: () => Promise<void> } | undefined;
+  let runtimeContext = '';
+
   try {
     emitStarted(evaluationId, projectName);
     updateEvaluationStatus(evaluationId, 'analyzing');
     emitAnalyzing(evaluationId);
 
-    console.log(`[${evaluationId}] Starting ${depth} ${mode} analysis of ${projectName}...`);
+    console.log(`[${evaluationId}] Starting ${depth} ${mode} analysis of ${projectName} (evalType: ${evaluationType})...`);
     const analysis = await analyzeProject(projectPath, depth);
     console.log(`[${evaluationId}] Analysis complete: ${analysis.api.totalEndpoints} endpoints, ${analysis.database.totalEntities} entities, ${analysis.metrics.totalFiles} files`);
     
     updateEvaluationStatus(evaluationId, 'evaluating', JSON.stringify(analysis));
+
+    // Run dynamic/UI evaluation if requested
+    if (evaluationType !== 'static') {
+      const evalResult = await runDynamicUiEvaluation(evaluationId, projectPath, evaluationType);
+      runtimeContext = evalResult.context;
+      runtimeProcess = evalResult.process;
+    }
 
     const scores: number[] = [];
     const roleResults: RoleResult[] = [];
@@ -108,7 +253,9 @@ async function runEvaluation(
         console.log(`[${evaluationId}] Evaluating with role: ${role} (${depth} ${mode} mode)`);
         emitEvaluatingRole(evaluationId, role, i, roles.length);
         
-        const result = await evaluateWithRole(role, analysis.summary, context, depth, mode, rolePrompts?.[role]);
+        // Combine original context with runtime evaluation context
+        const fullContext = runtimeContext ? `${context}\n${runtimeContext}` : context;
+        const result = await evaluateWithRole(role, analysis.summary, fullContext, depth, mode, rolePrompts?.[role]);
         const { score, summary, parsed } = parseRoleResult(result);
 
         scores.push(score);
@@ -175,6 +322,16 @@ async function runEvaluation(
     console.error('Evaluation failed:', error);
     updateEvaluationStatus(evaluationId, 'failed');
     emitFailed(evaluationId, String(error));
+  } finally {
+    // Cleanup runtime process if started
+    if (runtimeProcess) {
+      console.log(`[${evaluationId}] Cleaning up runtime process...`);
+      try {
+        await runtimeProcess.kill();
+      } catch (err) {
+        console.error(`[${evaluationId}] Failed to kill runtime process:`, err);
+      }
+    }
   }
 }
 
@@ -232,6 +389,7 @@ router.get('/:id', async (req: Request, res: Response) => {
     const result = {
       ...evaluation,
       analysisData: evaluation.analysisData ? JSON.parse(evaluation.analysisData) : null,
+      runtimeStages: evaluation.runtimeStages ? JSON.parse(evaluation.runtimeStages) : null,
       roleEvaluations: roleEvaluations.map(re => ({
         ...re,
         details: re.details ? JSON.parse(re.details) : null,

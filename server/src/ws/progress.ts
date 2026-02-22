@@ -3,7 +3,7 @@ import { Server } from 'http';
 
 export interface ProgressEvent {
   evaluationId: string;
-  type: 'started' | 'analyzing' | 'evaluating_role' | 'role_completed' | 'debating' | 'orchestrating' | 'reflecting' | 'completed' | 'failed';
+  type: 'started' | 'analyzing' | 'evaluating_role' | 'role_completed' | 'debating' | 'orchestrating' | 'reflecting' | 'runtime_testing' | 'ui_testing' | 'completed' | 'failed';
   message: string;
   progress: number;
   data?: Record<string, unknown>;
@@ -165,5 +165,25 @@ export function emitReflecting(evaluationId: string) {
     type: 'reflecting',
     message: '🧬 角色自进化反思中...',
     progress: 95,
+  });
+}
+
+export function emitRuntimeTesting(evaluationId: string, stage: string) {
+  emitProgress({
+    evaluationId,
+    type: 'runtime_testing',
+    message: `🚀 运行时测试: ${stage}...`,
+    progress: 85,
+    data: { stage },
+  });
+}
+
+export function emitUiTesting(evaluationId: string, flowName: string) {
+  emitProgress({
+    evaluationId,
+    type: 'ui_testing',
+    message: `🎭 UI 测试: ${flowName}...`,
+    progress: 90,
+    data: { flowName },
   });
 }

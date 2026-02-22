@@ -12,6 +12,7 @@ export interface EvaluationRequest {
   context: string;
   depth: string;
   mode?: string;
+  evaluationType?: 'static' | 'dynamic' | 'ui' | 'full';
   launchContext?: {
     launchWindow?: string;
     channels?: string[];
@@ -28,7 +29,16 @@ export interface EvaluationRecord {
   context: string;
   overallScore: number | null;
   status: string;
+  evaluationType?: 'static' | 'dynamic' | 'ui' | 'full';
   analysisData: any;
+  runtimeStages?: Array<{
+    stage: string;
+    status: string;
+    duration_ms: number;
+    score?: number;
+    errors?: string[];
+    details?: Record<string, unknown>;
+  }>;
   createdAt: string;
   completedAt: string | null;
   roleEvaluations?: RoleEvaluation[];

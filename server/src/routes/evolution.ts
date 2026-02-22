@@ -8,9 +8,12 @@ import {
   getLatestSynthesis,
   listSyntheses,
   markSynthesisApplied,
+  getEvaluation,
+  getRoleEvaluations,
+  saveReflection,
 } from '../db/sqlite';
-import { runEvolutionSynthesis } from '../ai/role-evolution';
-import type { ReflectionResult } from '../ai/role-evolution';
+import { runEvolutionSynthesis, runReflection } from '../ai/role-evolution';
+import type { ReflectionResult, RoleResult } from '../ai/role-evolution';
 
 const router = Router();
 
@@ -166,6 +169,94 @@ router.post('/apply/:synthesisId', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Apply synthesis error:', error);
     res.status(500).json({ error: 'Failed to apply synthesis' });
+  }
+});
+
+// POST /api/evolution/rerun-reflection/:evaluationId - Rerun reflection for a completed evaluation
+router.post('/rerun-reflection/:evaluationId', async (req: Request, res: Response) => {
+  try {
+    const { evaluationId } = req.params;
+    
+    // Check if evaluation exists and is completed
+    const evaluation = getEvaluation(evaluationId);
+    if (!evaluation) {
+      return res.status(404).json({ error: 'Evaluation not found' });
+    }
+    if (evaluation.status !== 'completed') {
+      return res.status(400).json({ error: 'Evaluation is not completed yet' });
+    }
+    
+    // Check if reflection already exists
+    const existingReflection = getReflection(evaluationId);
+    if (existingReflection) {
+      return res.status(400).json({ 
+        error: 'Reflection already exists for this evaluation',
+        reflectionId: existingReflection.id,
+      });
+    }
+    
+    // Get role evaluations
+    const roleEvaluations = getRoleEvaluations(evaluationId);
+    const regularRoles = roleEvaluations.filter(re => !re.role.startsWith('_'));
+    
+    if (regularRoles.length === 0) {
+      return res.status(400).json({ error: 'No role evaluations found for this evaluation' });
+    }
+    
+    // Convert to RoleResult format
+    const roleResults: RoleResult[] = regularRoles.map(re => ({
+      role: re.role,
+      score: re.score || 0,
+      summary: re.summary || '',
+      details: re.details ? JSON.parse(re.details) : {},
+    }));
+    
+    // Get debate summary if exists
+    const debateRole = roleEvaluations.find(re => re.role === '_debate');
+    const debateSummary = debateRole?.summary || undefined;
+    
+    console.log(`[${evaluationId}] Rerunning reflection for ${roleResults.length} roles...`);
+    
+    // Run reflection
+    const reflection = await runReflection(evaluationId, roleResults, debateSummary);
+    
+    // Save reflection
+    const reflectionId = saveReflection({
+      evaluationId,
+      timestamp: reflection.timestamp,
+      roleAssessments: reflection.role_assessments.map(a => ({
+        role: a.role,
+        qualityScore: a.quality_score,
+        strengths: a.strengths,
+        weaknesses: a.weaknesses,
+        promptSuggestions: a.prompt_suggestions,
+        redundancyWith: a.redundancy_with,
+      })),
+      blindSpots: reflection.blind_spots,
+      newRoleProposals: reflection.new_role_proposals.map(p => ({
+        id: p.id,
+        label: p.label,
+        emoji: p.emoji,
+        rationale: p.rationale,
+        draftPromptSketch: p.draft_prompt_sketch,
+      })),
+      metaObservations: reflection.meta_observations,
+    });
+    
+    console.log(`[${evaluationId}] Reflection rerun complete: ${reflection.role_assessments.length} assessments`);
+    
+    res.json({
+      success: true,
+      reflectionId,
+      evaluationId,
+      roleCount: roleResults.length,
+      assessmentCount: reflection.role_assessments.length,
+      blindSpotCount: reflection.blind_spots.length,
+      newRoleProposalCount: reflection.new_role_proposals.length,
+    });
+  } catch (error) {
+    console.error('Rerun reflection error:', error);
+    res.status(500).json({ error: 'Failed to rerun reflection' });
   }
 });
 
