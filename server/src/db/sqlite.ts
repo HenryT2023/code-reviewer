@@ -131,6 +131,39 @@ export interface ABTestRecord {
 
 let abTests: ABTestRecord[] = [];
 
+// Feedback data types
+export interface FeedbackTask {
+  id: string;
+  priority: 'high' | 'medium' | 'low';
+  description: string;
+  expectedImprovement: string;
+  estimatedTime: string;
+  status: 'pending' | 'completed' | 'partial' | 'skipped';
+  completedAt?: string;
+  actualChanges?: string;
+}
+
+export interface FeedbackPlan {
+  id: string;
+  evaluationId: string;
+  projectPath: string;
+  projectName: string;
+  baselineScore: number;
+  expectedScore: number;
+  tasks: FeedbackTask[];
+  createdAt: string;
+  completedAt?: string;
+  newEvaluationId?: string;
+  actualScore?: number;
+}
+
+interface FeedbackData {
+  plans: FeedbackPlan[];
+}
+
+let feedbackData: FeedbackData = { plans: [] };
+const FEEDBACK_FILE = path.join(DATA_DIR, 'feedback.json');
+
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -205,6 +238,25 @@ loadEvolutionData();
 loadMrepData();
 loadJudgeData();
 loadABTests();
+loadFeedbackData();
+
+function loadFeedbackData() {
+  ensureDataDir();
+  if (fs.existsSync(FEEDBACK_FILE)) {
+    try {
+      const raw = fs.readFileSync(FEEDBACK_FILE, 'utf-8');
+      feedbackData = JSON.parse(raw);
+      console.log(`📋 Loaded ${feedbackData.plans.length} feedback plans`);
+    } catch (err) {
+      console.error('Failed to load feedback data:', err);
+    }
+  }
+}
+
+function saveFeedbackData() {
+  ensureDataDir();
+  fs.writeFileSync(FEEDBACK_FILE, JSON.stringify(feedbackData, null, 2));
+}
 
 export function createEvaluation(
   projectName: string,
@@ -596,4 +648,111 @@ export function getAllMrepVerifications(projectPath?: string): Map<string, MrepV
     });
   }
   return new Map(entries);
+}
+
+// ========== Feedback CRUD ==========
+
+export function saveFeedbackPlan(plan: Omit<FeedbackPlan, 'id' | 'createdAt'>): string {
+  const id = uuidv4();
+  const record: FeedbackPlan = {
+    ...plan,
+    id,
+    createdAt: new Date().toISOString(),
+  };
+  feedbackData.plans.push(record);
+  saveFeedbackData();
+  return id;
+}
+
+export function getFeedbackPlan(planId: string): FeedbackPlan | undefined {
+  return feedbackData.plans.find(p => p.id === planId);
+}
+
+export function getFeedbackPlanByEvaluation(evaluationId: string): FeedbackPlan | undefined {
+  return feedbackData.plans.find(p => p.evaluationId === evaluationId);
+}
+
+export function listFeedbackPlans(projectPath?: string, limit = 20): FeedbackPlan[] {
+  let list = feedbackData.plans.slice();
+  if (projectPath) {
+    list = list.filter(p => p.projectPath === projectPath);
+  }
+  return list
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .slice(0, limit);
+}
+
+export function updateFeedbackTask(
+  planId: string,
+  taskId: string,
+  update: { status: FeedbackTask['status']; actualChanges?: string }
+): boolean {
+  const plan = feedbackData.plans.find(p => p.id === planId);
+  if (!plan) return false;
+
+  const task = plan.tasks.find(t => t.id === taskId);
+  if (!task) return false;
+
+  task.status = update.status;
+  if (update.actualChanges) {
+    task.actualChanges = update.actualChanges;
+  }
+  if (update.status === 'completed' || update.status === 'partial' || update.status === 'skipped') {
+    task.completedAt = new Date().toISOString();
+  }
+
+  // Check if all tasks are done
+  const allDone = plan.tasks.every(t => t.status !== 'pending');
+  if (allDone && !plan.completedAt) {
+    plan.completedAt = new Date().toISOString();
+  }
+
+  saveFeedbackData();
+  return true;
+}
+
+export function completeFeedbackPlan(
+  planId: string,
+  newEvaluationId: string,
+  actualScore: number
+): boolean {
+  const plan = feedbackData.plans.find(p => p.id === planId);
+  if (!plan) return false;
+
+  plan.newEvaluationId = newEvaluationId;
+  plan.actualScore = actualScore;
+  plan.completedAt = new Date().toISOString();
+  saveFeedbackData();
+  return true;
+}
+
+export function getProjectFeedbackStats(projectPath: string): {
+  totalPlans: number;
+  completedPlans: number;
+  averageImprovement: number;
+  taskCompletionRate: number;
+} {
+  const plans = feedbackData.plans.filter(p => p.projectPath === projectPath);
+  const completedPlans = plans.filter(p => p.actualScore !== undefined);
+
+  let totalImprovement = 0;
+  let totalTasks = 0;
+  let completedTasks = 0;
+
+  for (const plan of plans) {
+    if (plan.actualScore !== undefined) {
+      totalImprovement += plan.actualScore - plan.baselineScore;
+    }
+    for (const task of plan.tasks) {
+      totalTasks++;
+      if (task.status === 'completed') completedTasks++;
+    }
+  }
+
+  return {
+    totalPlans: plans.length,
+    completedPlans: completedPlans.length,
+    averageImprovement: completedPlans.length > 0 ? Math.round(totalImprovement / completedPlans.length) : 0,
+    taskCompletionRate: totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0,
+  };
 }
