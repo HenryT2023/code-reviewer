@@ -403,4 +403,26 @@ router.get('/:id', async (req: Request, res: Response) => {
   }
 });
 
+// Export for queue scheduler
+export async function runEvaluationJob(
+  job: { evaluationId: string; config: any },
+  workerId: number
+): Promise<void> {
+  const { evaluationId, config } = job;
+  console.log(`[Worker ${workerId}] Starting evaluation job: ${evaluationId}`);
+
+  await runEvaluation(
+    evaluationId,
+    config.projectPath,
+    config.projectName,
+    config.roles,
+    config.context,
+    config.depth,
+    config.mode,
+    config.evaluationType,
+    config.launchContext,
+    config.rolePrompts
+  );
+}
+
 export default router;

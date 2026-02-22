@@ -134,4 +134,52 @@ export const evolutionApi = {
   getStats: () => api.get<EvolutionStats>('/evolution/stats'),
 };
 
+// Queue API types
+export interface QueueJob {
+  id: string;
+  evaluationId: string;
+  projectName: string;
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  priority?: number;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  workerId?: number;
+  queuePosition?: number;
+  progress?: {
+    current: number;
+    total: number;
+    stage: string;
+  };
+  error?: string;
+}
+
+export interface QueueStatus {
+  stats: {
+    pending: number;
+    running: number;
+    completed: number;
+    failed: number;
+    cancelled: number;
+    totalProcessed: number;
+  };
+  workers: {
+    workers: Array<{
+      id: number;
+      busy: boolean;
+      currentJobId?: string;
+      currentEvaluationId?: string;
+    }>;
+    available: number;
+    busy: number;
+  };
+}
+
+export const queueApi = {
+  getStatus: () => api.get<QueueStatus>('/queue/status'),
+  getJobs: () => api.get<{ pending: QueueJob[]; running: QueueJob[]; completed: QueueJob[] }>('/queue/jobs'),
+  getJobByEvaluationId: (evaluationId: string) => api.get<QueueJob>(`/queue/job/${evaluationId}`),
+  cancelJob: (evaluationId: string) => api.delete(`/queue/job/${evaluationId}`),
+};
+
 export default api;

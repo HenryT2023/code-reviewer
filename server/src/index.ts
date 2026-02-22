@@ -14,7 +14,10 @@ import modelsRouter from './routes/models';
 import exportRouter from './routes/export';
 import trendsRouter from './routes/trends';
 import evolutionRouter from './routes/evolution';
+import queueRouter from './routes/queue';
 import { initWebSocket } from './ws/progress';
+import { loadQueueState, startAutoSave, startScheduler, setJobExecutor } from './queue';
+import { runEvaluationJob } from './routes/evaluate';
 
 const app = express();
 const server = createServer(app);
@@ -29,12 +32,19 @@ app.use('/api/models', modelsRouter);
 app.use('/api/export', exportRouter);
 app.use('/api/trends', trendsRouter);
 app.use('/api/evolution', evolutionRouter);
+app.use('/api/queue', queueRouter);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
 initWebSocket(server);
+
+// Initialize queue system
+loadQueueState();
+startAutoSave();
+setJobExecutor(runEvaluationJob);
+startScheduler();
 
 server.listen(PORT, () => {
   console.log(`🚀 CodeReviewer server running on http://localhost:${PORT}`);
@@ -43,5 +53,6 @@ server.listen(PORT, () => {
   console.log(`   GET  /api/evaluate/:id - Get evaluation result`);
   console.log(`   GET  /api/history - List evaluations`);
   console.log(`   GET  /api/health - Health check`);
+  console.log(`   GET  /api/queue/status - Queue status`);
   console.log(`   WS   /ws - WebSocket for real-time progress`);
 });

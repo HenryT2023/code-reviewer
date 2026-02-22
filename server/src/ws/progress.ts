@@ -187,3 +187,34 @@ export function emitUiTesting(evaluationId: string, flowName: string) {
     data: { flowName },
   });
 }
+
+// Queue-related events
+export function emitQueued(evaluationId: string, queuePosition: number) {
+  emitProgress({
+    evaluationId,
+    type: 'started',
+    message: `已加入队列，当前位置: ${queuePosition}`,
+    progress: 0,
+    data: { queuePosition, status: 'queued' },
+  });
+}
+
+export function emitDequeued(evaluationId: string, workerId: number) {
+  emitProgress({
+    evaluationId,
+    type: 'started',
+    message: `开始执行评测 (Worker ${workerId})`,
+    progress: 5,
+    data: { workerId, status: 'running' },
+  });
+}
+
+export function emitCancelled(evaluationId: string, reason: string) {
+  emitProgress({
+    evaluationId,
+    type: 'failed',
+    message: `评测已取消: ${reason}`,
+    progress: 0,
+    data: { reason, status: 'cancelled' },
+  });
+}
