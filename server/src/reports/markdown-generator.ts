@@ -167,8 +167,19 @@ export function generateMarkdownReport(data: ReportData): string {
   for (const role of sortedRoles) {
     lines.push(`### ${role.role} (${role.score}/100)`);
     lines.push('');
-    if (role.summary) {
-      lines.push(role.summary);
+    
+    // Extract summary - prefer details.summary if role.summary looks like JSON
+    let summaryText = role.summary || '';
+    if (role.details) {
+      try {
+        const details = typeof role.details === 'string' ? JSON.parse(role.details) : role.details;
+        if (details.summary && typeof details.summary === 'string') {
+          summaryText = details.summary;
+        }
+      } catch { /* use original */ }
+    }
+    if (summaryText && !summaryText.startsWith('{') && !summaryText.startsWith('```')) {
+      lines.push(`> ${summaryText}`);
       lines.push('');
     }
     
@@ -177,26 +188,82 @@ export function generateMarkdownReport(data: ReportData): string {
       try {
         const details = typeof role.details === 'string' ? JSON.parse(role.details) : role.details;
         
+        // Dimensions table (NEW)
+        if (details.dimensions && Object.keys(details.dimensions).length > 0) {
+          lines.push('#### Dimension Scores');
+          lines.push('');
+          lines.push('| Dimension | Score | Assessment |');
+          lines.push('|-----------|-------|------------|');
+          for (const [dim, data] of Object.entries(details.dimensions)) {
+            const d = data as { score?: number; comment?: string };
+            const dimName = dim.replace(/([A-Z])/g, ' $1').trim();
+            lines.push(`| ${dimName} | ${getScoreEmoji(d.score ?? 0)} ${d.score ?? 'N/A'} | ${(d.comment ?? '').substring(0, 100)}${(d.comment?.length ?? 0) > 100 ? '...' : ''} |`);
+          }
+          lines.push('');
+        }
+        
+        // Strengths (full list)
         if (details.strengths?.length) {
-          lines.push('**Strengths:**');
-          for (const s of details.strengths.slice(0, 5)) {
+          lines.push('#### Strengths');
+          lines.push('');
+          for (const s of details.strengths) {
             lines.push(`- ${s}`);
           }
           lines.push('');
         }
         
+        // Weaknesses (full list)
         if (details.weaknesses?.length) {
-          lines.push('**Weaknesses:**');
-          for (const w of details.weaknesses.slice(0, 5)) {
+          lines.push('#### Weaknesses');
+          lines.push('');
+          for (const w of details.weaknesses) {
             lines.push(`- ${w}`);
           }
           lines.push('');
         }
         
+        // Anti-Patterns (NEW)
+        if (details.antiPatterns?.length) {
+          lines.push('#### Anti-Patterns Detected');
+          lines.push('');
+          for (const ap of details.antiPatterns) {
+            lines.push(`- ⚠️ ${ap}`);
+          }
+          lines.push('');
+        }
+        
+        // Tech Debt (NEW)
+        if (details.techDebt?.length) {
+          lines.push('#### Technical Debt');
+          lines.push('');
+          for (const td of details.techDebt) {
+            lines.push(`- 🔧 ${td}`);
+          }
+          lines.push('');
+        }
+        
+        // Recommendations (full list)
         if (details.recommendations?.length) {
-          lines.push('**Recommendations:**');
-          for (const r of details.recommendations.slice(0, 5)) {
+          lines.push('#### Recommendations');
+          lines.push('');
+          for (const r of details.recommendations) {
             lines.push(`- ${r}`);
+          }
+          lines.push('');
+        }
+        
+        // MREP Claims summary (NEW)
+        if (details.claims?.length) {
+          lines.push('#### Verifiable Claims (MREP)');
+          lines.push('');
+          lines.push('| ID | Type | Severity | Statement |');
+          lines.push('|----|------|----------|-----------|');
+          for (const claim of details.claims.slice(0, 10)) {
+            const severityIcon = claim.severity === 'critical' ? '🔴' : claim.severity === 'major' ? '🟠' : '🟡';
+            lines.push(`| ${claim.id} | ${claim.type} | ${severityIcon} ${claim.severity} | ${claim.statement.substring(0, 80)}${claim.statement.length > 80 ? '...' : ''} |`);
+          }
+          if (details.claims.length > 10) {
+            lines.push(`| ... | | | *${details.claims.length - 10} more claims* |`);
           }
           lines.push('');
         }
@@ -215,10 +282,41 @@ export function generateMarkdownReport(data: ReportData): string {
     lines.push('');
     
     if (debate) {
-      lines.push('### Debate Summary');
+      lines.push('### Debate Round');
       lines.push('');
       lines.push(debate.summary || 'No debate summary available.');
       lines.push('');
+      
+      // Parse debate details for consensus and disputes
+      if (debate.details) {
+        try {
+          const debateDetails = typeof debate.details === 'string' ? JSON.parse(debate.details) : debate.details;
+          
+          if (debateDetails.consensus?.length) {
+            lines.push('#### Consensus Points');
+            lines.push('');
+            for (const c of debateDetails.consensus) {
+              lines.push(`- ✅ ${c}`);
+            }
+            lines.push('');
+          }
+          
+          if (debateDetails.disputes?.length) {
+            lines.push('#### Disputed Points');
+            lines.push('');
+            for (const d of debateDetails.disputes) {
+              if (typeof d === 'object') {
+                lines.push(`- ⚔️ **${d.topic || 'Topic'}**: ${d.positions?.join(' vs ') || d.description || JSON.stringify(d)}`);
+              } else {
+                lines.push(`- ⚔️ ${d}`);
+              }
+            }
+            lines.push('');
+          }
+        } catch {
+          // Skip if parsing fails
+        }
+      }
     }
     
     if (orchestrator) {
@@ -226,6 +324,42 @@ export function generateMarkdownReport(data: ReportData): string {
       lines.push('');
       lines.push(orchestrator.summary || 'No orchestrator summary available.');
       lines.push('');
+      
+      // Parse orchestrator structured output
+      if (orchestrator.details) {
+        try {
+          const orchDetails = typeof orchestrator.details === 'string' ? JSON.parse(orchestrator.details) : orchestrator.details;
+          
+          if (orchDetails.launch_readiness) {
+            const lr = orchDetails.launch_readiness;
+            lines.push('#### Launch Readiness');
+            lines.push('');
+            lines.push(`- **Ready**: ${lr.ready ? '✅ Yes' : '❌ No'}`);
+            if (lr.blockers?.length) {
+              lines.push(`- **Blockers**: ${lr.blockers.join(', ')}`);
+            }
+            if (lr.recommendations?.length) {
+              lines.push(`- **Pre-launch Actions**: ${lr.recommendations.join(', ')}`);
+            }
+            lines.push('');
+          }
+          
+          if (orchDetails.priority_actions?.length) {
+            lines.push('#### Priority Actions');
+            lines.push('');
+            for (const action of orchDetails.priority_actions) {
+              if (typeof action === 'object') {
+                lines.push(`1. **${action.action || action.title || 'Action'}** (${action.priority || 'medium'}) - ${action.rationale || action.description || ''}`);
+              } else {
+                lines.push(`1. ${action}`);
+              }
+            }
+            lines.push('');
+          }
+        } catch {
+          // Skip if parsing fails
+        }
+      }
     }
   }
 
