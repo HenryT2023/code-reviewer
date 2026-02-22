@@ -19,6 +19,7 @@ AI-powered project evaluation system with multi-role perspectives. Supports **st
 | 💰 **Pricing** | Pricing model, revenue optimization, market fit |
 | 📊 **Data** | Data architecture, analytics, metrics design |
 | 🔴 **RedTeam** | Security vulnerabilities, attack vectors, risk assessment |
+| 🎯 **UserInterview** | Real user perspective with 8 Enneagram-based personas |
 
 ### Evaluation Types
 
