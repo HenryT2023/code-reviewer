@@ -11,19 +11,30 @@ import {
   getEvaluation,
   getRoleEvaluations,
   saveReflection,
+  getAllMrepReports,
+  getAllMrepVerifications,
 } from '../db/sqlite';
 import { runEvolutionSynthesis, runReflection } from '../ai/role-evolution';
 import type { ReflectionResult, RoleResult } from '../ai/role-evolution';
+import { computeAggregateStats } from '../mrep/metrics';
+import { applyOverrides, rollbackOverride, listOverrides as listProjectOverrides } from '../prompt-overrides/manager';
 
 const router = Router();
 
-// GET /api/evolution/reflections - List all reflections
-router.get('/reflections', async (_req: Request, res: Response) => {
+function getProjectFilter(req: Request): string | undefined {
+  const p = req.query.project;
+  return typeof p === 'string' && p.length > 0 ? decodeURIComponent(p) : undefined;
+}
+
+// GET /api/evolution/reflections - List all reflections (optionally filtered by ?project=)
+router.get('/reflections', async (req: Request, res: Response) => {
   try {
-    const reflections = listReflections(50);
+    const projectPath = getProjectFilter(req);
+    const reflections = listReflections(50, projectPath);
     res.json({
       count: reflections.length,
-      total: getReflectionCount(),
+      total: getReflectionCount(projectPath),
+      projectPath: projectPath || null,
       reflections,
     });
   } catch (error) {
@@ -49,13 +60,14 @@ router.get('/reflections/:evaluationId', async (req: Request, res: Response) => 
   }
 });
 
-// POST /api/evolution/synthesize - Trigger evolution synthesis
-router.post('/synthesize', async (_req: Request, res: Response) => {
+// POST /api/evolution/synthesize - Trigger evolution synthesis (optionally scoped by ?project=)
+router.post('/synthesize', async (req: Request, res: Response) => {
   try {
-    const reflections = listReflections(20);
+    const projectPath = getProjectFilter(req);
+    const reflections = listReflections(20, projectPath);
     
     if (reflections.length === 0) {
-      return res.status(400).json({ error: 'No reflections available for synthesis' });
+      return res.status(400).json({ error: projectPath ? `No reflections for project: ${projectPath}` : 'No reflections available for synthesis' });
     }
 
     // Convert storage format to AI format
@@ -86,6 +98,7 @@ router.post('/synthesize', async (_req: Request, res: Response) => {
 
     // Save synthesis result
     const synthesisId = saveSynthesis({
+      projectPath: projectPath || reflections[0]?.projectPath || '__unknown__',
       version: synthesis.version,
       generatedAt: synthesis.generated_at,
       promptDiffs: synthesis.prompt_diffs.map(d => ({
@@ -125,10 +138,11 @@ router.post('/synthesize', async (_req: Request, res: Response) => {
   }
 });
 
-// GET /api/evolution/latest-synthesis - Get the latest synthesis result
-router.get('/latest-synthesis', async (_req: Request, res: Response) => {
+// GET /api/evolution/latest-synthesis - Get the latest synthesis result (optionally filtered by ?project=)
+router.get('/latest-synthesis', async (req: Request, res: Response) => {
   try {
-    const synthesis = getLatestSynthesis();
+    const projectPath = getProjectFilter(req);
+    const synthesis = getLatestSynthesis(projectPath);
     
     if (!synthesis) {
       return res.status(404).json({ error: 'No synthesis available yet' });
@@ -141,12 +155,14 @@ router.get('/latest-synthesis', async (_req: Request, res: Response) => {
   }
 });
 
-// GET /api/evolution/syntheses - List all syntheses
-router.get('/syntheses', async (_req: Request, res: Response) => {
+// GET /api/evolution/syntheses - List all syntheses (optionally filtered by ?project=)
+router.get('/syntheses', async (req: Request, res: Response) => {
   try {
-    const syntheses = listSyntheses(10);
+    const projectPath = getProjectFilter(req);
+    const syntheses = listSyntheses(10, projectPath);
     res.json({
       count: syntheses.length,
+      projectPath: projectPath || null,
       syntheses,
     });
   } catch (error) {
@@ -155,20 +171,80 @@ router.get('/syntheses', async (_req: Request, res: Response) => {
   }
 });
 
-// POST /api/evolution/apply/:synthesisId - Mark a synthesis as applied
+// POST /api/evolution/apply/:synthesisId - Apply synthesis: write prompt overrides + mark applied
 router.post('/apply/:synthesisId', async (req: Request, res: Response) => {
   try {
     const { synthesisId } = req.params;
-    const success = markSynthesisApplied(synthesisId);
-    
-    if (!success) {
+
+    // Find the synthesis
+    const allSyntheses = listSyntheses(100);
+    const synthesis = allSyntheses.find(s => s.id === synthesisId);
+    if (!synthesis) {
       return res.status(404).json({ error: 'Synthesis not found' });
     }
-    
-    res.json({ success: true, message: 'Synthesis marked as applied' });
+
+    // Write prompt overrides for diffs with rewritten prompts
+    const diffs = synthesis.promptDiffs
+      .filter(d => d.rewrittenPrompt && d.rewrittenPrompt.trim().length > 0)
+      .map(d => ({
+        role: d.role,
+        rewrittenPrompt: d.rewrittenPrompt,
+        confidence: d.confidence,
+      }));
+
+    let overrideResult = { applied: [] as string[], skipped: [] as string[] };
+    if (diffs.length > 0) {
+      overrideResult = applyOverrides(synthesisId, synthesis.projectPath, diffs);
+    }
+
+    // Mark synthesis as applied
+    const success = markSynthesisApplied(synthesisId);
+
+    res.json({
+      success: true,
+      message: 'Synthesis applied with prompt overrides',
+      overrides: overrideResult,
+    });
   } catch (error) {
     console.error('Apply synthesis error:', error);
     res.status(500).json({ error: 'Failed to apply synthesis' });
+  }
+});
+
+// POST /api/evolution/rollback/:role - Rollback a prompt override for a role
+router.post('/rollback/:role', async (req: Request, res: Response) => {
+  try {
+    const { role } = req.params;
+    const projectPath = getProjectFilter(req);
+    if (!projectPath) {
+      return res.status(400).json({ error: 'project query parameter is required' });
+    }
+
+    const success = rollbackOverride(projectPath, role);
+    if (!success) {
+      return res.status(404).json({ error: 'No override found for this role' });
+    }
+
+    res.json({ success: true, message: `Rolled back override for ${role}` });
+  } catch (error) {
+    console.error('Rollback error:', error);
+    res.status(500).json({ error: 'Failed to rollback override' });
+  }
+});
+
+// GET /api/evolution/overrides - List prompt overrides for a project
+router.get('/overrides', async (req: Request, res: Response) => {
+  try {
+    const projectPath = getProjectFilter(req);
+    if (!projectPath) {
+      return res.status(400).json({ error: 'project query parameter is required' });
+    }
+
+    const overrides = listProjectOverrides(projectPath);
+    res.json({ projectPath, overrides });
+  } catch (error) {
+    console.error('List overrides error:', error);
+    res.status(500).json({ error: 'Failed to list overrides' });
   }
 });
 
@@ -223,6 +299,7 @@ router.post('/rerun-reflection/:evaluationId', async (req: Request, res: Respons
     // Save reflection
     const reflectionId = saveReflection({
       evaluationId,
+      projectPath: evaluation.projectPath,
       timestamp: reflection.timestamp,
       roleAssessments: reflection.role_assessments.map(a => ({
         role: a.role,
@@ -260,11 +337,12 @@ router.post('/rerun-reflection/:evaluationId', async (req: Request, res: Respons
   }
 });
 
-// GET /api/evolution/stats - Get evolution statistics
-router.get('/stats', async (_req: Request, res: Response) => {
+// GET /api/evolution/stats - Get evolution statistics (optionally filtered by ?project=)
+router.get('/stats', async (req: Request, res: Response) => {
   try {
-    const reflections = listReflections(100);
-    const syntheses = listSyntheses(10);
+    const projectPath = getProjectFilter(req);
+    const reflections = listReflections(100, projectPath);
+    const syntheses = listSyntheses(10, projectPath);
     
     // Calculate average quality scores per role
     const roleScores: Record<string, number[]> = {};
@@ -296,6 +374,18 @@ router.get('/stats', async (_req: Request, res: Response) => {
       });
     });
     
+    // Compute MREP aggregate stats (scoped by project if filtered)
+    let mrepStats = null;
+    try {
+      const allReports = getAllMrepReports(projectPath);
+      const allVerifications = getAllMrepVerifications(projectPath);
+      if (allReports.length > 0) {
+        mrepStats = computeAggregateStats(allReports, allVerifications);
+      }
+    } catch (mrepErr) {
+      console.error('Failed to compute MREP stats:', mrepErr);
+    }
+
     res.json({
       reflectionCount: reflections.length,
       synthesisCount: syntheses.length,
@@ -310,6 +400,8 @@ router.get('/stats', async (_req: Request, res: Response) => {
         .map(([id, count]) => ({ id, count })),
       needsSynthesis: reflections.length >= 5 && (syntheses.length === 0 || 
         new Date(reflections[0].timestamp) > new Date(syntheses[0]?.generatedAt || 0)),
+      projectPath: projectPath || null,
+      mrep: mrepStats,
     });
   } catch (error) {
     console.error('Get stats error:', error);

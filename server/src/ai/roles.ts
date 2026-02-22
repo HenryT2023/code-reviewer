@@ -23,6 +23,39 @@ export const DEEP_INSTRUCTION = `
 - 0-39: 严重不足，需要大幅重构
 `;
 
+const MREP_CLAIMS_INSTRUCTION = `
+
+## MREP 层（AI 可消费的结构化断言）
+除了上述人类可读输出外，请在 JSON 中额外添加一个 "claims" 数组。每个 claim 是一个可验证的结构化断言：
+
+"claims": [
+  {
+    "id": "C001",
+    "type": "observation|risk|recommendation|metric",
+    "severity": "critical|major|minor|info",
+    "confidence": 0.85,
+    "statement": "具体断言（必须引用具体文件、函数、数据）",
+    "evidence": [
+      {
+        "type": "code_ref|metric_ref|config_ref|doc_ref",
+        "file": "相对文件路径",
+        "lines": [起始行, 结束行],
+        "snippet": "相关代码片段（简短）",
+        "description": "证据说明"
+      }
+    ],
+    "verifiable": true,
+    "verification_method": "file_exists:path|grep_pattern:regex|metric_check:key>value",
+    "tags": ["security", "performance", ...]
+  }
+]
+
+要求：
+- 每个 claim 必须有具体证据（文件路径、行号、代码片段）
+- confidence 基于证据强度：有代码引用=0.8+，有指标数据=0.7+，推测性=0.3-0.5
+- verifiable=true 的 claim 必须提供 verification_method
+- 至少输出 5 个 claims`;
+
 const JSON_OUTPUT_STANDARD = `请用JSON格式返回，包含：
 {
   "score": 总分(1-100),
@@ -209,7 +242,8 @@ const ARCHITECT_DEFAULT = `你是一位拥有15年经验的系统架构师，精
   "strengths": ["架构优点1", "架构优点2"],
   "techDebt": ["技术债1", "技术债2"],
   "recommendations": ["架构建议1", "架构建议2"]
-}`;
+}
+${MREP_CLAIMS_INSTRUCTION}`;
 
 const ARCHITECT_LAUNCH_READY = `你是一位拥有15年经验的系统架构师。你的任务不是评审架构优雅性，而是回答：「这个架构撑不撑得住上线？」
 
@@ -562,7 +596,8 @@ const CODER_DEFAULT = `你是一位拥有15年经验的资深代码审查员，�
     "todo_count": TODO数量
   },
   "recommendations": ["改进建议1", "改进建议2"]
-}`;
+}
+${MREP_CLAIMS_INSTRUCTION}`;
 
 const CODER_LAUNCH_READY = `你是一位资深代码审查员。产品即将上线，你需要从代码质量角度回答「代码能上线吗？」
 
@@ -653,7 +688,8 @@ const FACT_CHECKER_DEFAULT = `你是一位严谨的事实核查员，专门验�
     }
   ],
   "recommendations": ["建议1", "建议2"]
-}`;
+}
+${MREP_CLAIMS_INSTRUCTION}`;
 
 const FACT_CHECKER_LAUNCH_READY = `你是一位严谨的事实核查员。产品即将上线，你需要验证所有角色评估的可信度。
 
@@ -787,6 +823,8 @@ export const ROLE_REGISTRY: RoleDefinition[] = [
 
 // ─── Helper functions ─────────────────────────────────────────────
 
+import { getOverride } from '../prompt-overrides/manager';
+
 export function getRoleById(id: string): RoleDefinition | undefined {
   return ROLE_REGISTRY.find(r => r.id === id);
 }
@@ -795,12 +833,23 @@ export function getRolePrompt(
   roleId: string,
   mode: 'standard' | 'launch-ready',
   isDeep: boolean,
-  customPrompt?: string
+  customPrompt?: string,
+  projectPath?: string
 ): string {
+  // Priority 1: explicit custom prompt (from API request)
   if (customPrompt) {
     return `${customPrompt}\n${isDeep ? DEEP_INSTRUCTION : ''}\n请确保返回合法的JSON格式，包含 score(1-100)、summary、dimensions 等字段。`;
   }
 
+  // Priority 2: per-project prompt override (from evolution synthesis)
+  if (projectPath) {
+    const override = getOverride(projectPath, roleId);
+    if (override) {
+      return isDeep ? `${override}\n${DEEP_INSTRUCTION}` : override;
+    }
+  }
+
+  // Priority 3: default prompt from role registry
   const role = getRoleById(roleId);
   if (!role) {
     return `你是一位专业评审员。请评估这个项目并给出1-100的评分。\n${JSON_OUTPUT_STANDARD}`;

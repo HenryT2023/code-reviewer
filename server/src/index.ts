@@ -15,6 +15,9 @@ import exportRouter from './routes/export';
 import trendsRouter from './routes/trends';
 import evolutionRouter from './routes/evolution';
 import queueRouter from './routes/queue';
+import mrepRouter from './routes/mrep';
+import judgeRouter from './routes/judge';
+import abTestRouter from './routes/ab-test';
 import { initWebSocket } from './ws/progress';
 import { loadQueueState, startAutoSave, startScheduler, setJobExecutor } from './queue';
 import { runEvaluationJob } from './routes/evaluate';
@@ -33,6 +36,9 @@ app.use('/api/export', exportRouter);
 app.use('/api/trends', trendsRouter);
 app.use('/api/evolution', evolutionRouter);
 app.use('/api/queue', queueRouter);
+app.use('/api/mrep', mrepRouter);
+app.use('/api/judge', judgeRouter);
+app.use('/api/ab-test', abTestRouter);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });

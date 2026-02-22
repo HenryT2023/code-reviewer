@@ -84,12 +84,13 @@ export async function evaluateWithRole(
   context: string,
   depth: 'quick' | 'deep' = 'quick',
   mode: 'standard' | 'launch-ready' = 'standard',
-  customPrompt?: string
+  customPrompt?: string,
+  projectPath?: string
 ): Promise<string> {
   const isDeep = depth === 'deep';
   const maxTokens = isDeep ? 8000 : 4000;
 
-  const systemContent = getRolePrompt(role, mode, isDeep, customPrompt);
+  const systemContent = getRolePrompt(role, mode, isDeep, customPrompt, projectPath);
 
   const messages: QwenMessage[] = [
     { role: 'system', content: systemContent },

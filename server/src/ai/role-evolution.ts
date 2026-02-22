@@ -115,15 +115,33 @@ const REFLECTION_SYSTEM_PROMPT = `你是一位 AI 评测系统的质量审计员
   "meta_observations": "对整个评测系统的宏观观察"
 }`;
 
+export interface MrepQualityMetrics {
+  role_id: string;
+  total_claims: number;
+  evidence_coverage: number;
+  verification_pass_rate: number | null;
+  avg_confidence: number;
+}
+
 function buildReflectionUserMessage(
   roleResults: RoleResult[],
-  debateSummary?: string
+  debateSummary?: string,
+  mrepMetrics?: MrepQualityMetrics[],
+  judgmentSummary?: string
 ): string {
   const roleBlock = roleResults.map(r => {
     const roleName = ROLE_NAMES[r.role] || r.role;
-    return `## ${roleName}（评分: ${r.score}）
+    let block = `## ${roleName}（评分: ${r.score}）
 **摘要**: ${r.summary}
 **详情**: ${JSON.stringify(r.details, null, 2)}`;
+
+    // Append MREP metrics if available for this role
+    const mrep = mrepMetrics?.find(m => m.role_id === r.role);
+    if (mrep) {
+      block += `\n**MREP 客观指标**: claims=${mrep.total_claims}, 证据覆盖率=${mrep.evidence_coverage}, 验证通过率=${mrep.verification_pass_rate ?? 'N/A'}, 平均置信度=${mrep.avg_confidence}`;
+    }
+
+    return block;
   }).join('\n\n---\n\n');
 
   let message = `以下是各角色的评测输出：
@@ -134,6 +152,19 @@ ${roleBlock}`;
     message += `\n\n## 对喷/辩论摘要\n${debateSummary}`;
   }
 
+  if (mrepMetrics && mrepMetrics.length > 0) {
+    message += `\n\n## MREP 客观质量指标说明
+以上部分角色（coder, architect, fact_checker）附带了 MREP 指标。这些是程序化验证的客观数据：
+- **证据覆盖率**：claim 中有具体代码/文件引用的比例
+- **验证通过率**：引用的文件/代码经程序化验证确实存在的比例
+- **平均置信度**：AI 对自身断言的平均信心值
+请在评估角色质量时参考这些客观指标，verification_pass_rate 越高说明角色输出越可靠。`;
+  }
+
+  if (judgmentSummary) {
+    message += `\n\n${judgmentSummary}`;
+  }
+
   message += `\n\n请对以上所有角色的输出质量进行评估，找出盲区，并提出改进建议。`;
 
   return message;
@@ -142,11 +173,13 @@ ${roleBlock}`;
 export async function runReflection(
   evaluationId: string,
   roleResults: RoleResult[],
-  debateSummary?: string
+  debateSummary?: string,
+  mrepMetrics?: MrepQualityMetrics[],
+  judgmentSummary?: string
 ): Promise<ReflectionResult> {
   const messages: QwenMessage[] = [
     { role: 'system', content: REFLECTION_SYSTEM_PROMPT },
-    { role: 'user', content: buildReflectionUserMessage(roleResults, debateSummary) },
+    { role: 'user', content: buildReflectionUserMessage(roleResults, debateSummary, mrepMetrics, judgmentSummary) },
   ];
 
   const raw = await callQwen(messages, 'deepseek-chat', 4000);

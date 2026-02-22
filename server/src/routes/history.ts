@@ -1,12 +1,26 @@
 import { Router, Request, Response } from 'express';
-import { listEvaluations, getEvaluation, getRoleEvaluations, deleteEvaluation } from '../db/sqlite';
+import { listEvaluations, listProjects, getEvaluation, getRoleEvaluations, deleteEvaluation } from '../db/sqlite';
 
 const router = Router();
 
+// GET /api/history/projects - List all projects with evaluation counts
+router.get('/projects', async (_req: Request, res: Response) => {
+  try {
+    const projects = listProjects();
+    res.json(projects);
+  } catch (error) {
+    console.error('List projects error:', error);
+    res.status(500).json({ error: 'Failed to list projects' });
+  }
+});
+
+// GET /api/history?project=&limit= - List evaluations, optionally filtered by project
 router.get('/', async (req: Request, res: Response) => {
   try {
     const limit = parseInt(req.query.limit as string) || 20;
-    const evaluations = listEvaluations(limit);
+    const project = req.query.project;
+    const projectPath = typeof project === 'string' && project.length > 0 ? decodeURIComponent(project) : undefined;
+    const evaluations = listEvaluations(limit, projectPath);
     res.json(evaluations);
   } catch (error) {
     console.error('List evaluations error:', error);

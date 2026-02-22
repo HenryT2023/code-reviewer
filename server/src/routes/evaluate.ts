@@ -19,7 +19,14 @@ import {
   saveReflection,
   getReflection,
   updateRuntimeStages,
+  saveMrepReport,
+  saveMrepVerification,
+  saveJudgeReference,
+  saveJudgment,
+  getJudgment,
 } from '../db/sqlite';
+import { isMrepEnabledRole, extractMrepFromRoleOutput, verifyMrepReport } from '../mrep';
+import { getOrBuildReference, runGroundedJudge, formatJudgmentSummary } from '../grounded-judge';
 import {
   emitStarted,
   emitAnalyzing,
@@ -255,7 +262,7 @@ async function runEvaluation(
         
         // Combine original context with runtime evaluation context
         const fullContext = runtimeContext ? `${context}\n${runtimeContext}` : context;
-        const result = await evaluateWithRole(role, analysis.summary, fullContext, depth, mode, rolePrompts?.[role]);
+        const result = await evaluateWithRole(role, analysis.summary, fullContext, depth, mode, rolePrompts?.[role], projectPath);
         const { score, summary, parsed } = parseRoleResult(result);
 
         scores.push(score);
@@ -263,6 +270,24 @@ async function runEvaluation(
 
         saveRoleEvaluation(evaluationId, role, score, summary, JSON.stringify(parsed));
         console.log(`[${evaluationId}] Role ${role} scored: ${score}`);
+
+        // MREP: Extract structured claims from technical roles
+        if (isMrepEnabledRole(role)) {
+          try {
+            const mrepReport = extractMrepFromRoleOutput(role, evaluationId, parsed);
+            if (mrepReport) {
+              saveMrepReport(mrepReport);
+              console.log(`[${evaluationId}] MREP: ${role} produced ${mrepReport.claims.length} claims (coverage: ${mrepReport.metrics_snapshot.evidence_coverage})`);
+
+              // Verify claims against project files
+              const verification = verifyMrepReport(mrepReport, projectPath);
+              saveMrepVerification(verification);
+              console.log(`[${evaluationId}] MREP verify: ${verification.summary.verified}/${verification.summary.total} claims verified (pass_rate: ${verification.summary.pass_rate})`);
+            }
+          } catch (mrepErr) {
+            console.error(`[${evaluationId}] MREP extraction failed for ${role}:`, mrepErr);
+          }
+        }
 
         roleResults.push({ role, score, summary, details: parsed });
       } catch (error) {
@@ -312,10 +337,13 @@ async function runEvaluation(
     emitCompleted(evaluationId, overallScore);
     console.log(`[${evaluationId}] Evaluation completed with score: ${overallScore}`);
 
-    // Phase 3: Reflection (non-blocking, runs after completion)
+    // Phase 3: Reflection + Grounded Judge (non-blocking, parallel)
     if (roleResults.length > 0) {
-      runReflectionPhase(evaluationId, roleResults).catch(err => {
+      runReflectionPhase(evaluationId, projectPath, roleResults).catch(err => {
         console.error(`[${evaluationId}] Reflection failed:`, err);
+      });
+      runJudgePhase(evaluationId, projectPath, analysis, roleResults).catch(err => {
+        console.error(`[${evaluationId}] Judge phase failed:`, err);
       });
     }
   } catch (error) {
@@ -337,6 +365,7 @@ async function runEvaluation(
 
 async function runReflectionPhase(
   evaluationId: string,
+  projectPath: string,
   roleResults: RoleResult[],
   debateSummary?: string
 ) {
@@ -344,11 +373,27 @@ async function runReflectionPhase(
     console.log(`[${evaluationId}] Starting reflection phase...`);
     emitReflecting(evaluationId);
 
-    const reflection = await runReflection(evaluationId, roleResults, debateSummary);
+    // Gather MREP metrics for reflection
+    const { getMrepReports: fetchMrepReports, getMrepVerifications: fetchMrepVerifications } = await import('../db/sqlite');
+    const mrepReports = fetchMrepReports(evaluationId);
+    const mrepVerifications = fetchMrepVerifications(evaluationId);
+    const mrepMetrics = mrepReports.map(rr => {
+      const vr = mrepVerifications.find(v => v.role_id === rr.role_id);
+      return {
+        role_id: rr.role_id,
+        total_claims: rr.metrics_snapshot.total_claims,
+        evidence_coverage: rr.metrics_snapshot.evidence_coverage,
+        verification_pass_rate: vr?.summary.pass_rate ?? null,
+        avg_confidence: rr.metrics_snapshot.avg_confidence,
+      };
+    });
+
+    const reflection = await runReflection(evaluationId, roleResults, debateSummary, mrepMetrics.length > 0 ? mrepMetrics : undefined);
 
     // Convert to storage format
     saveReflection({
       evaluationId,
+      projectPath,
       timestamp: reflection.timestamp,
       roleAssessments: reflection.role_assessments.map(a => ({
         role: a.role,
@@ -372,6 +417,50 @@ async function runReflectionPhase(
     console.log(`[${evaluationId}] Reflection complete: ${reflection.role_assessments.length} assessments, ${reflection.blind_spots.length} blind spots, ${reflection.new_role_proposals.length} new role proposals`);
   } catch (error) {
     console.error(`[${evaluationId}] Reflection error:`, error);
+  }
+}
+
+async function runJudgePhase(
+  evaluationId: string,
+  projectPath: string,
+  analysis: { summary: string; quality: import('../analyzers/quality').QualityAnalysis },
+  roleResults: RoleResult[]
+) {
+  try {
+    console.log(`[${evaluationId}] Starting grounded judge phase...`);
+
+    // Build or retrieve cached reference (generated BEFORE seeing evaluation output)
+    const reference = await getOrBuildReference(projectPath, analysis.summary, analysis.quality);
+    saveJudgeReference(reference);
+
+    // Gather MREP metrics for accuracy dimension
+    const { getMrepReports, getMrepVerifications } = await import('../db/sqlite');
+    const mrepReports = getMrepReports(evaluationId);
+    const mrepVerifications = getMrepVerifications(evaluationId);
+    const mrepMetrics = mrepReports.map(rr => {
+      const vr = mrepVerifications.find((v: { role_id: string }) => v.role_id === rr.role_id);
+      return {
+        role_id: rr.role_id,
+        total_claims: rr.metrics_snapshot.total_claims,
+        evidence_coverage: rr.metrics_snapshot.evidence_coverage,
+        verification_pass_rate: vr?.summary.pass_rate ?? null,
+        avg_confidence: rr.metrics_snapshot.avg_confidence,
+      };
+    });
+
+    // Run the grounded judge
+    const judgment = await runGroundedJudge(
+      evaluationId,
+      projectPath,
+      reference,
+      roleResults,
+      mrepMetrics.length > 0 ? mrepMetrics : undefined
+    );
+
+    saveJudgment(judgment);
+    console.log(`[${evaluationId}] Judge complete: overall=${judgment.overallScore}, coverage=${judgment.dimensions.coverage.score}`);
+  } catch (error) {
+    console.error(`[${evaluationId}] Judge phase error:`, error);
   }
 }
 

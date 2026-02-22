@@ -41,6 +41,13 @@ AI-powered project evaluation system with multi-role perspectives. Supports **st
 - **Synthesis**: Aggregate reflections to generate new roles and improve existing prompts
 - **Rerun API**: Backfill reflections for historical evaluations
 
+### Evolution Closed Loop (NEW)
+
+- **MREP (Measurable, Referenceable, Evidence-based, Precise)**: Extract structured claims from role outputs with file/line references, then programmatically verify against actual codebase
+- **Grounded Judge**: AI judge scores evaluation quality using external knowledge-based checklists (coverage 40%, accuracy 25%, calibration 20%, specificity 15%)
+- **Prompt Override Layer**: Per-project prompt overrides from synthesis results, with version history and rollback support
+- **A/B Comparison**: Automated prompt effectiveness validation — runs baseline vs variant evaluations, compares judge scores, auto-applies if improvement exceeds threshold
+
 ### Static Analysis
 
 - API endpoint detection (Express, FastAPI, Django, Flask, Next.js, etc.)
@@ -136,6 +143,33 @@ cd web && npm run dev
 | POST | `/api/evolution/rerun-reflection/:id` | Rerun reflection for completed evaluation |
 | POST | `/api/evolution/synthesize` | Trigger evolution synthesis |
 | GET | `/api/evolution/stats` | Get evolution statistics |
+| GET | `/api/evolution/overrides` | List prompt overrides for project |
+| POST | `/api/evolution/rollback/:role` | Rollback prompt override |
+
+### MREP Endpoints
+
+| Method | Endpoint | Description |
+| ------ | -------- | ----------- |
+| GET | `/api/mrep/:evaluationId` | Get MREP reports for evaluation |
+| POST | `/api/mrep/:evaluationId/verify` | Verify MREP claims against codebase |
+| GET | `/api/mrep/stats/aggregate` | Get aggregate MREP statistics |
+
+### Judge Endpoints
+
+| Method | Endpoint | Description |
+| ------ | -------- | ----------- |
+| GET | `/api/judge/:evaluationId` | Get grounded judgment for evaluation |
+| GET | `/api/judge/stats` | Get judge statistics and trends |
+| POST | `/api/judge/:evaluationId/rerun` | Rerun judgment for evaluation |
+
+### A/B Test Endpoints
+
+| Method | Endpoint | Description |
+| ------ | -------- | ----------- |
+| POST | `/api/ab-test/trigger` | Start A/B test for synthesis |
+| GET | `/api/ab-test/:id` | Get A/B test status and result |
+| GET | `/api/ab-test` | List A/B tests |
+| POST | `/api/ab-test/:id/apply` | Manually apply A/B test result |
 
 ### Export Endpoints
 
@@ -184,9 +218,22 @@ code-reviewer/
 │       │   ├── ui.ts        #   Playwright UI flow testing
 │       │   └── types.ts     #   Evaluation type definitions
 │       ├── db/              # JSON file persistence
+│       ├── grounded-judge/  # Grounded Judge module
+│       │   ├── types.ts     #   Judge types & dimensions
+│       │   ├── reference-builder.ts  # Tech stack checklist builder
+│       │   └── judge.ts     #   Judge scoring logic
+│       ├── mrep/            # MREP extraction & verification
+│       │   ├── parser.ts    #   Claim extraction from role output
+│       │   ├── verifier.ts  #   Programmatic claim verification
+│       │   └── metrics.ts   #   MREP quality metrics
+│       ├── prompt-overrides/ # Prompt override layer
+│       │   └── manager.ts   #   Override CRUD & rollback
 │       ├── routes/          # Express routes
 │       │   ├── evaluate.ts  #   Evaluation API
-│       │   └── evolution.ts #   Evolution API
+│       │   ├── evolution.ts #   Evolution API
+│       │   ├── judge.ts     #   Judge API
+│       │   ├── mrep.ts      #   MREP API
+│       │   └── ab-test.ts   #   A/B Test API
 │       └── ws/              # WebSocket progress events
 ├── web/                     # Frontend (React + Vite + Ant Design)
 │   └── src/
