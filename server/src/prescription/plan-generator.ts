@@ -138,8 +138,10 @@ export async function generateAllPlans(
     const insight = insights.find(i => i.gapId === gap.id) || {
       gapId: gap.id,
       results: [],
+      llmAdvice: '',
       synthesis: '',
       queriesUsed: [],
+      sourceStrategy: 'llm_only' as const,
     };
 
     console.log(`[prescription] Generating plan for ${gap.id}: ${gap.title.substring(0, 50)}...`);

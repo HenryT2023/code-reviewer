@@ -15,6 +15,7 @@ export type {
   SearchQuery,
   SearchResult,
   CommunityInsight,
+  SourceStrategy,
   Prescription,
   PrescriptionReport,
   PrescriptionConfig,

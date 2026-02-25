@@ -9,7 +9,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { callQwen } from '../ai/qwen';
-import type { Gap, CommunitySource, SearchQuery, SearchResult, CommunityInsight } from './types';
+import type { Gap, CommunitySource, SearchQuery, SearchResult, CommunityInsight, SourceStrategy } from './types';
 
 // ─── Community Source Registry ──────────────────────────────────────────
 
@@ -220,37 +220,87 @@ async function buildSearchQueries(gaps: Gap[]): Promise<SearchQuery[]> {
   return queries;
 }
 
-// ─── Synthesis ──────────────────────────────────────────────────────────
+// ─── Channel B: LLM Expert Advisor ──────────────────────────────────────
 
-const SYNTHESIS_PROMPT = `你是一个技术顾问，负责从社区搜索结果中提取可操作的建议。
+const LLM_EXPERT_PROMPT = `你是一位资深技术顾问和产品专家，拥有丰富的 SaaS 产品交付、B2B 软件、跨境贸易系统的实战经验。
+
+你将收到一个项目评估中发现的具体问题。请以专家身份给出建议。
 
 规则：
-1. 提取 3-5 条具体的、可操作的建议（不是泛泛而谈）
-2. 每条建议附带来源信息
+1. 给出 3-5 条具体的、可操作的建议
+2. 区分"高置信度建议"（你确定的行业最佳实践）和"推测性建议"（需要进一步验证的）
 3. 区分"技术实现建议"和"商业策略建议"
-4. 如果搜索结果质量低或不相关，诚实说明
+4. 如果某条建议需要特定前提条件，明确说明
 5. 用中文回答，关键技术术语保留英文
 
 输出格式（纯文本，不要 JSON）：
 
-**可操作建议：**
-1. [建议内容] — 来源: [网站名] ([日期])
+**高置信度建议：**
+1. [建议内容] — 类型: [技术/商业] — 前提: [如有]
 2. ...
+
+**推测性建议（需验证）：**
+1. [建议内容] — 类型: [技术/商业] — 需验证: [什么]
+2. ...`;
+
+async function consultLlmExpert(gap: Gap): Promise<string> {
+  try {
+    const categoryLabel = gap.category === 'code_fix' ? '产品完整性'
+      : gap.category === 'validation' ? '市场验证'
+      : '外部集成';
+
+    const response = await callQwen([
+      { role: 'system', content: LLM_EXPERT_PROMPT },
+      { role: 'user', content: `问题领域: ${categoryLabel}\n标题: ${gap.title}\n详情: ${gap.description}\n来源评估角色: ${gap.sourceRoles.join(', ')}\n证据:\n${gap.evidence.map(e => `- ${e}`).join('\n')}` },
+    ]);
+    return response;
+  } catch (err) {
+    console.error(`[prescription] LLM expert consultation failed for ${gap.id}:`, err);
+    return '';
+  }
+}
+
+// ─── Cross-Validation Synthesis ─────────────────────────────────────────
+
+const CROSS_VALIDATION_PROMPT = `你是一个信息交叉验证专家。你收到两个独立信息通道对同一问题的分析：
+- Channel A: 互联网社区搜索结果（有 URL 来源但可能有噪声）
+- Channel B: LLM 专家直接建议（体系化但无来源佐证）
+
+你的任务是交叉验证并合并为最终建议。
+
+交叉验证规则：
+1. 如果两个通道给出一致建议 → 标记为 ✅ 高置信度
+2. 如果仅 LLM 专家给出、社区搜索无佐证 → 标记为 ⚠️ 专家建议（待验证）
+3. 如果两个通道矛盾 → 标记为 ⚔️ 分歧点，呈现双方观点
+4. 社区搜索结果为空时，仅基于 LLM 专家建议输出，但明确标注
+
+输出格式（纯文本，不要 JSON）：
+
+**✅ 高置信度建议（双通道一致）：**
+1. [建议] — 社区来源: [网站] / 专家确认
+
+**⚠️ 专家建议（待社区验证）：**
+1. [建议] — LLM 专家建议，暂无社区佐证
+
+**⚔️ 分歧点（如有）：**
+1. [议题]: 社区观点 vs 专家观点
 
 **信息质量评估：** [高/中/低] — [原因]`;
 
-async function synthesizeResults(gap: Gap, results: SearchResult[]): Promise<string> {
-  if (results.length === 0) {
-    return '未找到相关社区讨论。建议通过直接客户访谈获取此问题的解答。';
-  }
-
-  const resultText = results.map((r, i) =>
-    `[${i + 1}] ${r.title}\n    来源: ${r.source} ${r.publishedDate ? `(${r.publishedDate})` : ''}\n    摘要: ${r.snippet}`
-  ).join('\n\n');
+async function crossValidateSynthesize(
+  gap: Gap,
+  webResults: SearchResult[],
+  llmAdvice: string,
+): Promise<string> {
+  const webText = webResults.length > 0
+    ? webResults.map((r, i) =>
+        `[${i + 1}] ${r.title}\n    来源: ${r.source} ${r.publishedDate ? `(${r.publishedDate})` : ''}\n    摘要: ${r.snippet}`
+      ).join('\n\n')
+    : '（社区搜索无结果）';
 
   const response = await callQwen([
-    { role: 'system', content: SYNTHESIS_PROMPT },
-    { role: 'user', content: `问题: ${gap.title}\n详情: ${gap.description}\n类别: ${gap.category}\n\n搜索结果:\n${resultText}` },
+    { role: 'system', content: CROSS_VALIDATION_PROMPT },
+    { role: 'user', content: `问题: ${gap.title}\n详情: ${gap.description}\n类别: ${gap.category}\n\n## Channel A: 社区搜索结果\n${webText}\n\n## Channel B: LLM 专家建议\n${llmAdvice || '（专家咨询失败）'}` },
   ]);
 
   return response;
@@ -263,71 +313,84 @@ export async function searchCommunity(
   braveApiKey: string,
   cacheTtlDays: number = 7,
 ): Promise<CommunityInsight[]> {
-  if (!braveApiKey) {
-    console.warn('[prescription] BRAVE_SEARCH_API_KEY not set, skipping community search');
-    return gaps.map(g => ({
-      gapId: g.id,
-      results: [],
-      synthesis: '社区搜索未启用（缺少 BRAVE_SEARCH_API_KEY）。请在 .env 中配置后重新运行。',
-      queriesUsed: [],
-    }));
+  const hasWebSearch = !!braveApiKey;
+  const strategy: SourceStrategy = hasWebSearch ? 'hybrid' : 'llm_only';
+
+  if (!hasWebSearch) {
+    console.log('[prescription] No BRAVE_SEARCH_API_KEY — using llm_only mode');
+  } else {
+    console.log('[prescription] Hybrid mode: Web Search + LLM Expert');
   }
 
-  // Step 1: Build queries via AI
-  console.log(`[prescription] Building search queries for ${gaps.length} gaps...`);
-  const queries = await buildSearchQueries(gaps);
-  console.log(`[prescription] Generated ${queries.length} search queries`);
+  // ── Channel A: Web Search (if available) ──
 
-  // Step 2: Execute searches (with cache)
   const resultsByGap = new Map<string, { results: SearchResult[]; queries: string[] }>();
-
   for (const gap of gaps) {
     resultsByGap.set(gap.id, { results: [], queries: [] });
   }
 
-  for (const sq of queries) {
-    // Pick the best source for this query
-    const source = SOURCES.find(s => sq.targetSources.includes(s.id));
-    const fullQuery = source ? `${sq.query} ${source.siteFilter}` : sq.query;
+  if (hasWebSearch) {
+    console.log(`[prescription] Building search queries for ${gaps.length} gaps...`);
+    const queries = await buildSearchQueries(gaps);
+    console.log(`[prescription] Generated ${queries.length} search queries`);
 
-    const entry = resultsByGap.get(sq.gapId)!;
-    entry.queries.push(fullQuery);
+    for (const sq of queries) {
+      const source = SOURCES.find(s => sq.targetSources.includes(s.id));
+      const fullQuery = source ? `${sq.query} ${source.siteFilter}` : sq.query;
 
-    // Check cache
-    const cached = getCachedResults(fullQuery, cacheTtlDays);
-    if (cached) {
-      console.log(`[prescription] Cache hit: ${fullQuery.substring(0, 60)}...`);
-      entry.results.push(...cached);
-      continue;
-    }
+      const entry = resultsByGap.get(sq.gapId)!;
+      entry.queries.push(fullQuery);
 
-    // Search Brave
-    try {
-      console.log(`[prescription] Searching: ${fullQuery.substring(0, 60)}...`);
-      const results = await braveSearch(fullQuery, braveApiKey, 5);
-      entry.results.push(...results);
-      setCachedResults(fullQuery, results);
-      // Rate limit: 1 query per 500ms
-      await new Promise(resolve => setTimeout(resolve, 500));
-    } catch (err) {
-      console.error(`[prescription] Search failed for "${fullQuery}":`, err);
+      // Check cache
+      const cached = getCachedResults(fullQuery, cacheTtlDays);
+      if (cached) {
+        console.log(`[prescription] Cache hit: ${fullQuery.substring(0, 60)}...`);
+        entry.results.push(...cached);
+        continue;
+      }
+
+      // Search Brave
+      try {
+        console.log(`[prescription] Searching: ${fullQuery.substring(0, 60)}...`);
+        const results = await braveSearch(fullQuery, braveApiKey, 5);
+        entry.results.push(...results);
+        setCachedResults(fullQuery, results);
+        await new Promise(resolve => setTimeout(resolve, 500));
+      } catch (err) {
+        console.error(`[prescription] Search failed for "${fullQuery}":`, err);
+      }
     }
   }
 
-  // Step 3: Synthesize per gap
+  // ── Channel B: LLM Expert (always available) ──
+
+  console.log(`[prescription] Consulting LLM expert for ${gaps.length} gaps...`);
+  const llmAdviceByGap = new Map<string, string>();
+  for (const gap of gaps) {
+    console.log(`[prescription] LLM expert: ${gap.id} — ${gap.title.substring(0, 50)}...`);
+    const advice = await consultLlmExpert(gap);
+    llmAdviceByGap.set(gap.id, advice);
+  }
+
+  // ── Cross-Validation Synthesis ──
+
   const insights: CommunityInsight[] = [];
 
   for (const gap of gaps) {
-    const entry = resultsByGap.get(gap.id)!;
-    console.log(`[prescription] Synthesizing ${entry.results.length} results for ${gap.id}...`);
+    const webEntry = resultsByGap.get(gap.id)!;
+    const llmAdvice = llmAdviceByGap.get(gap.id) || '';
 
-    const synthesis = await synthesizeResults(gap, entry.results);
+    console.log(`[prescription] Cross-validating ${gap.id}: ${webEntry.results.length} web results + LLM advice`);
+
+    const synthesis = await crossValidateSynthesize(gap, webEntry.results, llmAdvice);
 
     insights.push({
       gapId: gap.id,
-      results: entry.results.slice(0, 10), // Cap at 10 results per gap
+      results: webEntry.results.slice(0, 10),
+      llmAdvice,
       synthesis,
-      queriesUsed: entry.queries,
+      queriesUsed: webEntry.queries,
+      sourceStrategy: webEntry.results.length > 0 ? 'hybrid' : (hasWebSearch ? 'llm_only' : 'llm_only'),
     });
   }
 

@@ -49,12 +49,18 @@ export interface SearchResult {
   publishedDate?: string;
 }
 
+export type SourceStrategy = 'web_only' | 'llm_only' | 'hybrid';
+
 export interface CommunityInsight {
   gapId: string;
   results: SearchResult[];
-  /** AI-synthesized actionable advice from search results */
+  /** Channel B: LLM Expert direct advice (independent of web search) */
+  llmAdvice: string;
+  /** Cross-validated synthesis merging web search + LLM expert */
   synthesis: string;
   queriesUsed: string[];
+  /** Which channels contributed to this insight */
+  sourceStrategy: SourceStrategy;
 }
 
 // ─── Prescription Types ─────────────────────────────────────────────────
