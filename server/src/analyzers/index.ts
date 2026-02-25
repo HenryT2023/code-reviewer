@@ -67,17 +67,39 @@ async function gatherDeepContext(
   const specSummaries: string[] = [];
   const crossServiceDeps: string[] = [];
 
-  // 1. Read spec files
+  // 1. Read spec files from specs/ and docs/ directories
   const specsDir = path.join(projectPath, 'specs');
-  if (fs.existsSync(specsDir)) {
+  const docsDir = path.join(projectPath, 'docs');
+  for (const dir of [specsDir, docsDir]) {
+    if (!fs.existsSync(dir)) continue;
     try {
-      const specFiles = fs.readdirSync(specsDir).filter(f => f.endsWith('.md')).sort();
-      for (const sf of specFiles.slice(0, 5)) {
+      const mdFiles = fs.readdirSync(dir).filter(f => f.endsWith('.md')).sort();
+      for (const sf of mdFiles.slice(0, 8)) {
+        if (specSummaries.length >= 12) break;
         try {
-          const content = fs.readFileSync(path.join(specsDir, sf), 'utf-8');
-          // Take first 800 chars as summary
-          specSummaries.push(`[${sf}] ${content.substring(0, 800)}`);
+          const content = fs.readFileSync(path.join(dir, sf), 'utf-8');
+          const dirName = path.basename(dir);
+          specSummaries.push(`[${dirName}/${sf}] ${content.substring(0, 800)}`);
         } catch { /* skip */ }
+      }
+    } catch { /* skip */ }
+  }
+  // Also scan docs/ subdirectories (e.g. docs/pmf/, docs/api/)
+  if (fs.existsSync(docsDir)) {
+    try {
+      const subDirs = fs.readdirSync(docsDir, { withFileTypes: true })
+        .filter(d => d.isDirectory())
+        .map(d => d.name);
+      for (const sub of subDirs.slice(0, 5)) {
+        const subPath = path.join(docsDir, sub);
+        const mdFiles = fs.readdirSync(subPath).filter(f => f.endsWith('.md')).sort();
+        for (const sf of mdFiles.slice(0, 3)) {
+          if (specSummaries.length >= 15) break;
+          try {
+            const content = fs.readFileSync(path.join(subPath, sf), 'utf-8');
+            specSummaries.push(`[docs/${sub}/${sf}] ${content.substring(0, 600)}`);
+          } catch { /* skip */ }
+        }
       }
     } catch { /* skip */ }
   }
@@ -281,13 +303,83 @@ function generateSummary(
     `- Linter: ${quality.linters.join(', ') || '❌ 未配置'}`,
     `- Formatter: ${quality.formatters.join(', ') || '❌ 未配置'}`,
     `- CI/CD: ${quality.ciPlatform || '❌ 未配置'}`,
-    `- 测试框架: ${quality.testFrameworks.join(', ') || '❌ 未配置'}`,
-    `- 测试文件数: ${quality.testFiles.length}`,
     `- Docker: ${quality.hasDockerfile ? '✅' : '❌'} | Compose: ${quality.hasDockerCompose ? '✅' : '❌'}`,
     `- Specs: ${quality.hasSpecs ? `✅ (${quality.specFiles.length} 个)` : '❌'}`,
     `- Contracts: ${quality.hasContracts ? '✅' : '❌'}`,
     '',
   );
+
+  // Documentation inventory — list key docs found in docs/ and specs/
+  const docsDirPath = path.join(structure.path, 'docs');
+  if (fs.existsSync(docsDirPath)) {
+    try {
+      const docFiles = fs.readdirSync(docsDirPath).filter(f => f.endsWith('.md'));
+      if (docFiles.length > 0) {
+        lines.push(
+          '## 项目文档',
+          `共 ${docFiles.length} 篇文档:`,
+          ...docFiles.slice(0, 15).map(f => `  - docs/${f}`),
+          '',
+        );
+      }
+    } catch { /* skip */ }
+  }
+
+  // Test Coverage Analysis
+  if (quality.testCoverage) {
+    const tc = quality.testCoverage;
+    const statusIcon = (s: string) => s === 'good' ? '✅' : s === 'warning' ? '⚠️' : '❌';
+    lines.push(
+      '## 测试覆盖分析',
+      '',
+      '| 指标 | 值 |',
+      '|------|-----|',
+      `| 测试文件数 | ${tc.testFileCount} (${Math.round(tc.testFileRatio * 100)}%) |`,
+      `| 测试代码行 | ${tc.testLineCount.toLocaleString()} (${Math.round(tc.testLineRatio * 100)}%) |`,
+      `| 测试框架 | ${tc.testFrameworks.join(', ') || '未检测到'} |`,
+      `| 覆盖率工具 | ${tc.coverageConfigured ? tc.coverageTools.join(', ') : '❌ 未配置'} |`,
+      `| 测试质量评分 | ${tc.testQualityScore}/100 |`,
+      '',
+      '### 测试类型分布',
+      '',
+      `- 单元测试: ${tc.testTypes.unit}`,
+      `- 集成测试: ${tc.testTypes.integration}`,
+      `- E2E 测试: ${tc.testTypes.e2e}`,
+      '',
+    );
+
+    if (tc.moduleTestCoverage.length > 0) {
+      lines.push(
+        '### 模块测试覆盖',
+        '',
+        '| 模块 | 源文件 | 测试文件 | 覆盖率 | 状态 |',
+        '|------|--------|----------|--------|------|',
+        ...tc.moduleTestCoverage.slice(0, 10).map(m => 
+          `| ${m.module} | ${m.sourceFiles} | ${m.testFiles} | ${Math.round(m.ratio * 100)}% | ${statusIcon(m.status)} |`
+        ),
+        '',
+      );
+    }
+
+    lines.push(
+      '### 测试模式使用',
+      '',
+      `- Fixtures/Setup: ${tc.testPatterns.fixtures > 0 ? `✅ (${tc.testPatterns.fixtures} 文件)` : '❌'}`,
+      `- Mocks: ${tc.testPatterns.mocks > 0 ? `✅ (${tc.testPatterns.mocks} 文件)` : '❌'}`,
+      `- Factories: ${tc.testPatterns.factories > 0 ? `✅ (${tc.testPatterns.factories} 文件)` : '❌'}`,
+      `- Snapshots: ${tc.testPatterns.snapshots > 0 ? `✅ (${tc.testPatterns.snapshots} 文件)` : '❌'}`,
+      '',
+    );
+
+    if (tc.recommendations.length > 0) {
+      lines.push(
+        '### 测试改进建议',
+        '',
+        ...tc.recommendations.map(r => `- ⚠️ ${r}`),
+        '',
+      );
+    }
+  }
 
   // Python quality
   if (quality.pythonQuality) {

@@ -2,12 +2,51 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import { glob } from 'glob';
+import { 
+  analyzeCoverageIntelligenceSync, 
+  convertToLegacyFormat,
+  type CoverageIntelligence,
+} from './coverage';
+
+export interface TestCoverageAnalysis {
+  testFileCount: number;
+  testFileRatio: number;
+  testLineCount: number;
+  testLineRatio: number;
+  testFrameworks: string[];
+  testTypes: {
+    unit: number;
+    integration: number;
+    e2e: number;
+  };
+  coverageConfigured: boolean;
+  coverageTools: string[];
+  moduleTestCoverage: ModuleTestCoverage[];
+  testPatterns: {
+    fixtures: number;
+    mocks: number;
+    factories: number;
+    snapshots: number;
+  };
+  testQualityScore: number;
+  recommendations: string[];
+  coverageIntelligence?: CoverageIntelligence;
+}
+
+export interface ModuleTestCoverage {
+  module: string;
+  sourceFiles: number;
+  testFiles: number;
+  ratio: number;
+  status: 'good' | 'warning' | 'critical';
+}
 
 export interface QualityAnalysis {
   hasTests: boolean;
   testFiles: string[];
   testFramework: string | null;
   testFrameworks: string[];
+  testCoverage: TestCoverageAnalysis;
   hasLinter: boolean;
   linterType: string | null;
   linters: string[];
@@ -76,12 +115,16 @@ export function analyzeCodeQuality(projectPath: string): QualityAnalysis {
   const vulnerabilities = checkVulnerabilities(projectPath);
   const pythonQuality = analyzePythonQuality(projectPath);
   const specFiles = findSpecFiles(projectPath);
+  
+  // Use new Coverage Intelligence module
+  const testCoverage = analyzeTestCoverageWithIntelligence(projectPath, testFiles, testFrameworks, codeMetrics);
 
   return {
     hasTests: testFiles.length > 0,
     testFiles: testFiles.slice(0, 30),
     testFramework: testFrameworks[0] || null,
     testFrameworks,
+    testCoverage,
     hasLinter: linters.length > 0,
     linterType: linters[0] || null,
     linters,
@@ -178,7 +221,8 @@ function findTestFiles(projectPath: string): string[] {
           if (name.includes('.test.') || name.includes('.spec.') ||
               name.endsWith('_test.ts') || name.endsWith('_test.js') ||
               name.endsWith('_test.py') || name.startsWith('test_') ||
-              name.includes('.test.') || name.includes('_spec.')) {
+              name.includes('.test.') || name.includes('_spec.') ||
+              name === 'conftest.py' || name === 'factories.py') {
             testFiles.push(fullPath);
           }
         }
@@ -350,4 +394,272 @@ function checkVulnerabilities(projectPath: string): VulnerabilityInfo | null {
     const metadata = audit.metadata?.vulnerabilities || {};
     return { total: metadata.total || 0, critical: metadata.critical || 0, high: metadata.high || 0, moderate: metadata.moderate || 0, low: metadata.low || 0 };
   } catch { return null; }
+}
+
+// Async version kept for future use but not currently called
+// async function analyzeTestCoverageWithIntelligenceAsync(
+//   projectPath: string,
+//   testFiles: string[],
+//   testFrameworks: string[],
+//   codeMetrics: CodeMetrics
+// ): Promise<TestCoverageAnalysis> {
+//   try {
+//     const intelligence = await analyzeCoverageIntelligenceSync(projectPath, testFiles);
+//     return convertToLegacyFormat(intelligence, testFrameworks);
+//   } catch (err) {
+//     console.error('Coverage Intelligence failed, falling back to legacy:', err);
+//     return analyzeTestCoverageLegacy(projectPath, testFiles, testFrameworks, codeMetrics);
+//   }
+// }
+
+function analyzeTestCoverageWithIntelligence(
+  projectPath: string,
+  testFiles: string[],
+  testFrameworks: string[],
+  codeMetrics: CodeMetrics
+): TestCoverageAnalysis {
+  // Try sync Coverage Intelligence first
+  try {
+    const intelligence = analyzeCoverageIntelligenceSync(projectPath, testFiles);
+    const result = convertToLegacyFormat(intelligence, testFrameworks);
+    return result;
+  } catch (err) {
+    console.error('Coverage Intelligence sync failed, falling back to legacy:', err);
+  }
+  
+  // Fallback to legacy analysis
+  const legacy = analyzeTestCoverageLegacy(projectPath, testFiles, testFrameworks, codeMetrics);
+  
+  // Mark as proxy since we couldn't use intelligence
+  legacy.coverageIntelligence = undefined;
+  
+  return legacy;
+}
+
+function analyzeTestCoverageLegacy(
+  projectPath: string,
+  testFiles: string[],
+  testFrameworks: string[],
+  codeMetrics: CodeMetrics
+): TestCoverageAnalysis {
+  const recommendations: string[] = [];
+  
+  // Calculate test file ratio
+  const testFileCount = testFiles.length;
+  const testFileRatio = codeMetrics.totalFiles > 0 
+    ? Math.round((testFileCount / codeMetrics.totalFiles) * 100) / 100 
+    : 0;
+
+  // Calculate test line count
+  let testLineCount = 0;
+  for (const tf of testFiles) {
+    try {
+      if (fs.statSync(tf).isFile()) {
+        const content = fs.readFileSync(tf, 'utf-8');
+        testLineCount += content.split('\n').length;
+      }
+    } catch { /* ignore */ }
+  }
+  const testLineRatio = codeMetrics.totalLines > 0 
+    ? Math.round((testLineCount / codeMetrics.totalLines) * 100) / 100 
+    : 0;
+
+  // Classify test types
+  const testTypes = { unit: 0, integration: 0, e2e: 0 };
+  for (const tf of testFiles) {
+    const name = tf.toLowerCase();
+    if (name.includes('e2e') || name.includes('playwright') || name.includes('cypress') || name.includes('selenium')) {
+      testTypes.e2e++;
+    } else if (name.includes('integration') || name.includes('api_test') || name.includes('api.test')) {
+      testTypes.integration++;
+    } else {
+      testTypes.unit++;
+    }
+  }
+
+  // Detect coverage tools
+  const coverageTools: string[] = [];
+  const allDeps = collectAllDependencies(projectPath);
+  if (allDeps.has('pytest-cov') || hasFileAnywhere(projectPath, '.coveragerc') || hasFileAnywhere(projectPath, 'coverage.py')) {
+    coverageTools.push('pytest-cov');
+  }
+  if (allDeps.has('nyc') || allDeps.has('c8')) coverageTools.push('nyc/c8');
+  if (allDeps.has('@vitest/coverage-v8') || allDeps.has('@vitest/coverage-istanbul')) coverageTools.push('vitest-coverage');
+  if (hasFileAnywhere(projectPath, 'jest.config.js') || hasFileAnywhere(projectPath, 'jest.config.ts')) {
+    try {
+      const jestConfigs = findFilesRecursive(projectPath, 'jest.config.js', 3);
+      for (const jc of jestConfigs) {
+        const content = fs.readFileSync(jc, 'utf-8');
+        if (content.includes('coverage') || content.includes('collectCoverage')) {
+          coverageTools.push('jest-coverage');
+          break;
+        }
+      }
+    } catch { /* ignore */ }
+  }
+  // Check pyproject.toml for coverage config
+  const pyprojectFiles = findFilesRecursive(projectPath, 'pyproject.toml', 3);
+  for (const f of pyprojectFiles) {
+    try {
+      const content = fs.readFileSync(f, 'utf-8');
+      if (content.includes('pytest-cov') || content.includes('[tool.coverage]')) {
+        if (!coverageTools.includes('pytest-cov')) coverageTools.push('pytest-cov');
+      }
+    } catch { /* ignore */ }
+  }
+
+  // Analyze module-level test coverage
+  const moduleTestCoverage = analyzeModuleTestCoverage(projectPath, testFiles);
+
+  // Detect test patterns (fixtures, mocks, factories, snapshots)
+  const testPatterns = { fixtures: 0, mocks: 0, factories: 0, snapshots: 0 };
+  for (const tf of testFiles) {
+    try {
+      if (!fs.statSync(tf).isFile()) continue;
+      const content = fs.readFileSync(tf, 'utf-8').toLowerCase();
+      if (content.includes('fixture') || content.includes('conftest') || content.includes('beforeeach') || content.includes('beforeall')) {
+        testPatterns.fixtures++;
+      }
+      if (content.includes('mock') || content.includes('jest.fn') || content.includes('patch') || content.includes('mocker')) {
+        testPatterns.mocks++;
+      }
+      if (content.includes('factory') || content.includes('faker') || content.includes('factoryboy')) {
+        testPatterns.factories++;
+      }
+      if (content.includes('snapshot') || content.includes('tomatchsnapshot') || content.includes('tomatchinlinesnapshot')) {
+        testPatterns.snapshots++;
+      }
+    } catch { /* ignore */ }
+  }
+
+  // Calculate test quality score (0-100)
+  let testQualityScore = 0;
+  // Test file ratio (max 25 points)
+  testQualityScore += Math.min(testFileRatio * 100, 25);
+  // Test frameworks (max 15 points)
+  testQualityScore += Math.min(testFrameworks.length * 5, 15);
+  // Coverage tools (max 15 points)
+  testQualityScore += coverageTools.length > 0 ? 15 : 0;
+  // Test types diversity (max 15 points)
+  const typesUsed = [testTypes.unit, testTypes.integration, testTypes.e2e].filter(t => t > 0).length;
+  testQualityScore += typesUsed * 5;
+  // Test patterns (max 20 points)
+  const patternsUsed = [testPatterns.fixtures, testPatterns.mocks, testPatterns.factories].filter(p => p > 0).length;
+  testQualityScore += patternsUsed * 6 + (testPatterns.snapshots > 0 ? 2 : 0);
+  // Module coverage (max 10 points)
+  const goodModules = moduleTestCoverage.filter(m => m.status === 'good').length;
+  const totalModules = moduleTestCoverage.length;
+  testQualityScore += totalModules > 0 ? Math.round((goodModules / totalModules) * 10) : 0;
+
+  testQualityScore = Math.min(Math.round(testQualityScore), 100);
+
+  // Generate recommendations
+  if (testFileRatio < 0.1) {
+    recommendations.push(`测试文件比例过低 (${Math.round(testFileRatio * 100)}%)，建议达到 15-20%`);
+  }
+  if (coverageTools.length === 0) {
+    recommendations.push('未配置覆盖率工具，建议添加 pytest-cov 或 jest --coverage');
+  }
+  if (testTypes.integration === 0 && testTypes.e2e === 0) {
+    recommendations.push('缺少集成测试和 E2E 测试，建议补充 API 级别测试');
+  }
+  if (testPatterns.mocks === 0) {
+    recommendations.push('未检测到 Mock 使用，建议为外部依赖添加 Mock');
+  }
+  if (testPatterns.factories === 0 && testFileCount > 5) {
+    recommendations.push('未检测到测试数据工厂，建议使用 Factory Boy 或 Faker');
+  }
+  const criticalModules = moduleTestCoverage.filter(m => m.status === 'critical');
+  if (criticalModules.length > 0) {
+    recommendations.push(`${criticalModules.length} 个核心模块缺少测试: ${criticalModules.slice(0, 3).map(m => m.module).join(', ')}`);
+  }
+
+  return {
+    testFileCount,
+    testFileRatio,
+    testLineCount,
+    testLineRatio,
+    testFrameworks,
+    testTypes,
+    coverageConfigured: coverageTools.length > 0,
+    coverageTools,
+    moduleTestCoverage,
+    testPatterns,
+    testQualityScore,
+    recommendations,
+  };
+}
+
+function analyzeModuleTestCoverage(projectPath: string, testFiles: string[]): ModuleTestCoverage[] {
+  const modules: ModuleTestCoverage[] = [];
+  const codeExtensions = ['.py', '.ts', '.tsx', '.js', '.jsx'];
+  const ignoreDirs = ['node_modules', '.venv', 'venv', '__pycache__', 'dist', 'build', '.git', 'tests', 'test', '__tests__'];
+
+  // Find top-level source directories
+  const sourceDirs: string[] = [];
+  try {
+    const entries = fs.readdirSync(projectPath, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory() || ignoreDirs.includes(entry.name) || entry.name.startsWith('.')) continue;
+      const dirPath = path.join(projectPath, entry.name);
+      // Check if it contains source files
+      try {
+        const files = fs.readdirSync(dirPath);
+        const hasSource = files.some(f => codeExtensions.some(ext => f.endsWith(ext)));
+        if (hasSource || ['src', 'app', 'lib', 'crm', 'api', 'agents', 'services'].includes(entry.name)) {
+          sourceDirs.push(entry.name);
+        }
+      } catch { /* ignore */ }
+    }
+  } catch { /* ignore */ }
+
+  // For each source directory, count source files and matching test files
+  for (const dir of sourceDirs) {
+    const dirPath = path.join(projectPath, dir);
+    let sourceFiles = 0;
+    let matchingTests = 0;
+
+    // Count source files
+    function countSourceFiles(d: string, depth = 0) {
+      if (depth > 5) return;
+      try {
+        const entries = fs.readdirSync(d, { withFileTypes: true });
+        for (const entry of entries) {
+          if (ignoreDirs.includes(entry.name) || entry.name.startsWith('.')) continue;
+          const fullPath = path.join(d, entry.name);
+          if (entry.isDirectory()) {
+            countSourceFiles(fullPath, depth + 1);
+          } else if (entry.isFile()) {
+            const ext = path.extname(entry.name);
+            if (codeExtensions.includes(ext) && !entry.name.includes('.test.') && !entry.name.includes('_test.') && !entry.name.startsWith('test_')) {
+              sourceFiles++;
+            }
+          }
+        }
+      } catch { /* ignore */ }
+    }
+    countSourceFiles(dirPath);
+
+    // Count test files that reference this module
+    for (const tf of testFiles) {
+      const testName = path.basename(tf).toLowerCase();
+      const testContent = (() => {
+        try { return fs.readFileSync(tf, 'utf-8').toLowerCase(); } catch { return ''; }
+      })();
+      if (testName.includes(dir.toLowerCase()) || testContent.includes(`from ${dir}`) || testContent.includes(`import { `) && testContent.includes(dir)) {
+        matchingTests++;
+      }
+    }
+
+    const ratio = sourceFiles > 0 ? Math.round((matchingTests / sourceFiles) * 100) / 100 : 0;
+    let status: 'good' | 'warning' | 'critical' = 'good';
+    if (ratio < 0.05) status = 'critical';
+    else if (ratio < 0.15) status = 'warning';
+
+    if (sourceFiles > 0) {
+      modules.push({ module: dir, sourceFiles, testFiles: matchingTests, ratio, status });
+    }
+  }
+
+  return modules.sort((a, b) => a.ratio - b.ratio);
 }

@@ -28,6 +28,117 @@ import {
 import { isMrepEnabledRole, extractMrepFromRoleOutput, verifyMrepReport } from '../mrep';
 import { getOrBuildReference, runGroundedJudge, formatJudgmentSummary } from '../grounded-judge';
 import { generateMarkdownReport, saveReportToProject } from '../reports';
+
+// Utility: truncate string to max length
+function truncate(str: string, maxLen: number): string {
+  if (!str || str.length <= maxLen) return str;
+  return str.slice(0, maxLen - 3) + '...';
+}
+
+// Max context size for coverage injection (2KB)
+const MAX_COVERAGE_CONTEXT_SIZE = 2048;
+const MAX_COMMENT_LENGTH = 80;
+const MAX_MODULES = 5;
+const MAX_DIMENSIONS = 6;
+const MAX_ACTIONS = 3;
+
+// Format coverage intelligence data for role context injection
+function formatCoverageForRole(testCoverage: any): string | null {
+  if (!testCoverage) return null;
+  
+  const ci = testCoverage.coverageIntelligence;
+  const lines: string[] = [];
+  
+  lines.push('## Coverage Intelligence Data');
+  lines.push('');
+  
+  if (ci) {
+    lines.push(`- **Coverage Source**: ${ci.meta?.coverageSource || 'proxy'} (isProxy=${!ci.meta?.hasRealCoverage})`);
+    lines.push(`- **Coverage Score**: ${ci.quality?.coverageScore ?? 'n/a'}/100`);
+    lines.push(`- **Quality Score**: ${ci.quality?.testQualityScore ?? 'n/a'}/100`);
+    lines.push(`- **Final Score**: ${ci.quality?.finalScore ?? 'n/a'}/100`);
+    lines.push('');
+    
+    // Top uncovered modules (limited to MAX_MODULES)
+    const modules = ci.modules || [];
+    const topUncovered = modules
+      .slice()
+      .sort((a: any, b: any) => (a.metrics?.lineCoverage ?? 0) - (b.metrics?.lineCoverage ?? 0))
+      .slice(0, MAX_MODULES);
+    
+    if (topUncovered.length > 0) {
+      lines.push('### Top Uncovered Modules');
+      for (const m of topUncovered) {
+        const lineCov = m.metrics?.lineCoverage ?? 'n/a';
+        lines.push(`- ${m.name}: ${lineCov}% line, ${m.status}`);
+      }
+      lines.push('');
+    }
+    
+    // Quality dimensions (limited to MAX_DIMENSIONS, truncated comments)
+    if (ci.quality?.dimensions) {
+      const dims = ci.quality.dimensions;
+      lines.push('### Quality Dimensions');
+      const dimEntries = [
+        ['Assert Density', dims.assertDensity],
+        ['Naming', dims.naming],
+        ['Flaky Risk', dims.flakyRisk],
+        ['Isolation', dims.isolation],
+        ['Duplication', dims.duplication],
+        ['Dependency Smell', dims.dependencySmell],
+      ].slice(0, MAX_DIMENSIONS);
+      
+      for (const [name, dim] of dimEntries) {
+        if (dim) {
+          const comment = truncate(dim.comment || '', MAX_COMMENT_LENGTH);
+          lines.push(`- ${name}: ${dim.score}/100 — ${comment}`);
+        }
+      }
+      lines.push('');
+    }
+    
+    // Action items (limited to MAX_ACTIONS, truncated descriptions)
+    if (ci.actionItems && ci.actionItems.length > 0) {
+      lines.push('### Recommended Actions');
+      for (const action of ci.actionItems.slice(0, MAX_ACTIONS)) {
+        const priorityIcon = action.priority === 'high' ? '🔴' : action.priority === 'medium' ? '🟡' : '🟢';
+        const desc = truncate(action.description || '', MAX_COMMENT_LENGTH);
+        lines.push(`${priorityIcon} ${action.title} (${action.effort}) — ${desc}`);
+      }
+      lines.push('');
+    }
+  } else {
+    // Fallback to legacy data
+    lines.push(`- **Coverage Source**: proxy (no coverage artifact)`);
+    lines.push(`- **Test Quality Score**: ${testCoverage.testQualityScore ?? 'n/a'}/100`);
+    lines.push('');
+    
+    if (testCoverage.moduleTestCoverage && testCoverage.moduleTestCoverage.length > 0) {
+      lines.push('### Module Test Coverage');
+      for (const m of testCoverage.moduleTestCoverage.slice(0, MAX_MODULES)) {
+        lines.push(`- ${m.module}: ${Math.round(m.ratio * 100)}% ratio, ${m.status}`);
+      }
+      lines.push('');
+    }
+    
+    if (testCoverage.recommendations && testCoverage.recommendations.length > 0) {
+      lines.push('### Recommendations');
+      for (const r of testCoverage.recommendations.slice(0, MAX_ACTIONS)) {
+        lines.push(`- ${truncate(r, MAX_COMMENT_LENGTH)}`);
+      }
+      lines.push('');
+    }
+  }
+  
+  const result = lines.join('\n');
+  
+  // Final size check - truncate if exceeds max
+  if (result.length > MAX_COVERAGE_CONTEXT_SIZE) {
+    return result.slice(0, MAX_COVERAGE_CONTEXT_SIZE - 50) + '\n\n[truncated for context limit]';
+  }
+  
+  return result;
+}
 import {
   emitStarted,
   emitAnalyzing,
@@ -253,6 +364,9 @@ async function runEvaluation(
 
     const scores: number[] = [];
     const roleResults: RoleResult[] = [];
+    
+    // Build Coverage Intelligence context for technical roles
+    const coverageContext = formatCoverageForRole(analysis.quality?.testCoverage);
 
     // Phase 1: Run all role evaluations
     for (let i = 0; i < roles.length; i++) {
@@ -262,7 +376,13 @@ async function runEvaluation(
         emitEvaluatingRole(evaluationId, role, i, roles.length);
         
         // Combine original context with runtime evaluation context
-        const fullContext = runtimeContext ? `${context}\n${runtimeContext}` : context;
+        let fullContext = runtimeContext ? `${context}\n${runtimeContext}` : context;
+        
+        // Inject coverage intelligence data for technical roles
+        if (['architect', 'coder', 'trade_expert', 'security'].includes(role) && coverageContext) {
+          fullContext = `${fullContext}\n\n${coverageContext}`;
+        }
+        
         const result = await evaluateWithRole(role, analysis.summary, fullContext, depth, mode, rolePrompts?.[role], projectPath);
         const { score, summary, parsed } = parseRoleResult(result);
 
@@ -365,7 +485,11 @@ async function runEvaluation(
             totalColumns: analysis.database?.totalColumns,
             orms: analysis.database?.orms,
           },
-          quality: analysis.quality,
+          quality: {
+            ...analysis.quality,
+            hasDocker: analysis.quality?.hasDockerfile || analysis.quality?.hasDockerCompose,
+            hasLinting: analysis.quality?.hasLinter,
+          },
         },
         depth,
         mode,

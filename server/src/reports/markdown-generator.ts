@@ -40,6 +40,60 @@ export interface ReportData {
       hasDocker?: boolean;
       hasLinting?: boolean;
       hasTypeChecking?: boolean;
+      testCoverage?: {
+        testFileCount: number;
+        testFileRatio: number;
+        testLineCount: number;
+        testLineRatio: number;
+        testFrameworks: string[];
+        testTypes: { unit: number; integration: number; e2e: number };
+        coverageConfigured: boolean;
+        coverageTools: string[];
+        moduleTestCoverage: Array<{
+          module: string;
+          sourceFiles: number;
+          testFiles: number;
+          ratio: number;
+          status: 'good' | 'warning' | 'critical';
+        }>;
+        testPatterns: { fixtures: number; mocks: number; factories: number; snapshots: number };
+        testQualityScore: number;
+        recommendations: string[];
+        coverageIntelligence?: {
+          overview: any;
+          modules: any[];
+          tests: any[];
+          quality: {
+            coverageScore: number;
+            testQualityScore: number;
+            finalScore: number;
+            dimensions: {
+              assertDensity: { score: number; avg: number; comment: string };
+              naming: { score: number; violations: number; examples: string[]; comment: string };
+              flakyRisk: { score: number; riskFiles: string[]; comment: string };
+              isolation: { score: number; comment: string };
+              duplication: { score: number; clusters: any[]; comment: string };
+              dependencySmell: { score: number; hotspots: string[]; comment: string };
+            };
+          };
+          actionItems: Array<{
+            id: string;
+            priority: 'high' | 'medium' | 'low';
+            type: string;
+            title: string;
+            description: string;
+            targetModule: string;
+            expectedImpact: string;
+            effort: 'small' | 'medium' | 'large';
+          }>;
+          meta: {
+            hasRealCoverage: boolean;
+            coverageSource: string;
+            projectType: string;
+            analyzedAt: string;
+          };
+        };
+      };
     };
   };
   depth: string;
@@ -138,11 +192,105 @@ export function generateMarkdownReport(data: ReportData): string {
         q.hasTypeChecking ? '✅ TypeCheck' : '❌ TypeCheck',
       ];
       lines.push(`| Quality Checks | ${checks.join(' ')} |`);
-      if (q.testFileCount) {
-        lines.push(`| Test Files | ${q.testFileCount} |`);
-      }
     }
     lines.push('');
+
+    // Test Coverage Analysis (NEW)
+    if (analysisData.quality?.testCoverage) {
+      const tc = analysisData.quality.testCoverage;
+      const statusIcon = (s: string) => s === 'good' ? '✅' : s === 'warning' ? '⚠️' : '❌';
+      
+      lines.push('## Test Coverage Analysis');
+      lines.push('');
+      lines.push('| Metric | Value |');
+      lines.push('|--------|-------|');
+      lines.push(`| Test Files | ${tc.testFileCount} (${Math.round(tc.testFileRatio * 100)}% of total) |`);
+      lines.push(`| Test Lines | ${tc.testLineCount.toLocaleString()} (${Math.round(tc.testLineRatio * 100)}% of code) |`);
+      lines.push(`| Frameworks | ${tc.testFrameworks.join(', ') || 'Not detected'} |`);
+      lines.push(`| Coverage Tools | ${tc.coverageConfigured ? tc.coverageTools.join(', ') : '❌ Not configured'} |`);
+      lines.push(`| Test Quality Score | ${tc.testQualityScore}/100 |`);
+      lines.push('');
+
+      lines.push('### Test Type Distribution');
+      lines.push('');
+      lines.push(`- **Unit Tests**: ${tc.testTypes.unit}`);
+      lines.push(`- **Integration Tests**: ${tc.testTypes.integration}`);
+      lines.push(`- **E2E Tests**: ${tc.testTypes.e2e}`);
+      lines.push('');
+
+      if (tc.moduleTestCoverage.length > 0) {
+        lines.push('### Module Test Coverage');
+        lines.push('');
+        lines.push('| Module | Source Files | Test Files | Coverage | Status |');
+        lines.push('|--------|--------------|------------|----------|--------|');
+        for (const m of tc.moduleTestCoverage.slice(0, 10)) {
+          lines.push(`| ${m.module} | ${m.sourceFiles} | ${m.testFiles} | ${Math.round(m.ratio * 100)}% | ${statusIcon(m.status)} |`);
+        }
+        lines.push('');
+      }
+
+      lines.push('### Test Patterns');
+      lines.push('');
+      lines.push(`- **Fixtures/Setup**: ${tc.testPatterns.fixtures > 0 ? `✅ (${tc.testPatterns.fixtures} files)` : '❌'}`);
+      lines.push(`- **Mocks**: ${tc.testPatterns.mocks > 0 ? `✅ (${tc.testPatterns.mocks} files)` : '❌'}`);
+      lines.push(`- **Factories**: ${tc.testPatterns.factories > 0 ? `✅ (${tc.testPatterns.factories} files)` : '❌'}`);
+      lines.push(`- **Snapshots**: ${tc.testPatterns.snapshots > 0 ? `✅ (${tc.testPatterns.snapshots} files)` : '❌'}`);
+      lines.push('');
+
+      if (tc.recommendations.length > 0) {
+        lines.push('### Test Improvement Recommendations');
+        lines.push('');
+        for (const r of tc.recommendations) {
+          lines.push(`- ⚠️ ${r}`);
+        }
+        lines.push('');
+      }
+
+      // Coverage Intelligence (if available)
+      if (tc.coverageIntelligence) {
+        const ci = tc.coverageIntelligence;
+        const coverageWeight = 0.55;
+        const qualityWeight = 0.45;
+        
+        lines.push('### Coverage Intelligence');
+        lines.push('');
+        lines.push(`- **Project Type**: ${ci.meta.projectType}`);
+        lines.push(`- **Coverage Source**: ${ci.meta.hasRealCoverage ? ci.meta.coverageSource : 'Proxy (no coverage report)'}`);
+        lines.push(`- **Coverage Score**: ${ci.quality.coverageScore}/100${ci.meta.hasRealCoverage ? '' : ' (proxy)'}`);
+        lines.push(`- **Quality Score**: ${ci.quality.testQualityScore}/100`);
+        lines.push(`- **Final Score**: ${ci.quality.finalScore}/100 = ${coverageWeight}×${ci.quality.coverageScore} + ${qualityWeight}×${ci.quality.testQualityScore}`);
+        lines.push('');
+
+        // Quality dimensions
+        if (ci.quality.dimensions) {
+          const dims = ci.quality.dimensions;
+          lines.push('#### Quality Dimensions');
+          lines.push('');
+          lines.push('| Dimension | Score | Comment |');
+          lines.push('|-----------|-------|---------|');
+          lines.push(`| Assert Density | ${dims.assertDensity.score} | ${dims.assertDensity.comment} |`);
+          lines.push(`| Naming | ${dims.naming.score} | ${dims.naming.comment} |`);
+          lines.push(`| Flaky Risk | ${dims.flakyRisk.score} | ${dims.flakyRisk.comment} |`);
+          lines.push(`| Isolation | ${dims.isolation.score} | ${dims.isolation.comment} |`);
+          lines.push(`| Duplication | ${dims.duplication.score} | ${dims.duplication.comment} |`);
+          lines.push(`| Dependency Smell | ${dims.dependencySmell.score} | ${dims.dependencySmell.comment} |`);
+          lines.push('');
+        }
+
+        // Action items
+        if (ci.actionItems.length > 0) {
+          lines.push('#### Action Plan (Next 7 days)');
+          lines.push('');
+          for (const action of ci.actionItems.slice(0, 5)) {
+            const priorityIcon = action.priority === 'high' ? '🔴' : action.priority === 'medium' ? '🟡' : '🟢';
+            lines.push(`${priorityIcon} **${action.title}** (${action.effort})`);
+            lines.push(`  - ${action.description}`);
+            lines.push(`  - Impact: ${action.expectedImpact}`);
+            lines.push('');
+          }
+        }
+      }
+    }
   }
 
   // Role Evaluations

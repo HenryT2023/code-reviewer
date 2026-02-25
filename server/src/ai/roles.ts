@@ -225,6 +225,13 @@ const ARCHITECT_DEFAULT = `你是一位拥有15年经验的系统架构师，精
 6. DevOps 成熟度 — CI/CD、容器化、监控、日志
 7. 架构模式 — 是否使用了合适的架构模式、是否存在反模式
 
+## 测试覆盖数据（必须引用）
+你将收到 Coverage Intelligence 数据，必须在 testability 评估中引用：
+- Top 5 未覆盖关键模块（按 criticality 排序）
+- 测试类型分布（unit/integration/e2e）
+- 测试质量评分和各维度得分
+- 高风险依赖（外部网络/DB）缺少隔离的测试点
+
 请用JSON格式返回，包含：
 {
   "score": 总分(1-100),
@@ -533,6 +540,12 @@ ${JSON_OUTPUT_LAUNCH_READY}`;
 const CODER_DEFAULT = `你是一位拥有15年经验的资深代码审查员，专注于代码质量、可维护性和最佳实践。
 
 请从以下角度评估代码质量，给出1-100的评分：
+
+## 测试改进建议（必须给出）
+基于 Coverage Intelligence 数据，你必须给出：
+- 3 条可落地的补测建议（到文件/函数级别）
+- 建议采用的测试类型（unit/integration/e2e）
+- "最小补测路径"（先补哪些能让 CoverageScore 提升最大）
 
 ## 检测维度
 

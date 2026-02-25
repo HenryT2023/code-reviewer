@@ -114,7 +114,10 @@ export async function analyzeMetrics(projectPath: string): Promise<CodeMetrics> 
       }
       totalFunctions += functionCount;
 
-      if (lineCount > 500 || functionCount > 20) {
+      // Exclude test files from high complexity count — test files naturally have many small test methods
+      const isTestFile = file.includes('test_') || file.includes('.test.') || file.includes('.spec.') || 
+                         file.includes('__tests__') || file.includes('conftest');
+      if ((lineCount > 500 || functionCount > 20) && !isTestFile) {
         filesWithHighComplexity++;
       }
     } catch {
