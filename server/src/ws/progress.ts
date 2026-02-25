@@ -3,7 +3,7 @@ import { Server } from 'http';
 
 export interface ProgressEvent {
   evaluationId: string;
-  type: 'started' | 'analyzing' | 'evaluating_role' | 'role_completed' | 'debating' | 'orchestrating' | 'reflecting' | 'runtime_testing' | 'ui_testing' | 'completed' | 'failed';
+  type: 'started' | 'analyzing' | 'evaluating_role' | 'role_completed' | 'debating' | 'orchestrating' | 'reflecting' | 'prescribing' | 'runtime_testing' | 'ui_testing' | 'completed' | 'failed';
   message: string;
   progress: number;
   data?: Record<string, unknown>;
@@ -216,5 +216,14 @@ export function emitCancelled(evaluationId: string, reason: string) {
     message: `评测已取消: ${reason}`,
     progress: 0,
     data: { reason, status: 'cancelled' },
+  });
+}
+
+export function emitPrescribing(evaluationId: string) {
+  emitProgress({
+    evaluationId,
+    type: 'prescribing',
+    message: '🩺 处方引擎：搜索社区解法 & 生成治疗方案...',
+    progress: 96,
   });
 }

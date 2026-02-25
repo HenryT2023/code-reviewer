@@ -511,6 +511,14 @@ export function generateMarkdownReport(data: ReportData): string {
     }
   }
 
+  // Prescription Engine notice
+  lines.push('## 🩺 Prescriptions');
+  lines.push('');
+  lines.push('> 处方引擎将在评估完成后异步运行，自动搜索社区解法并生成可执行治疗方案。');
+  lines.push('> 生成的计划文件位于: `.code-review/plans/`');
+  lines.push('> 在 Windsurf 中打开 `.md` 文件即可让 Cascade 引导执行修复。');
+  lines.push('');
+
   // Footer
   lines.push('---');
   lines.push('');

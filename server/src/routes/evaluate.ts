@@ -28,6 +28,8 @@ import {
 import { isMrepEnabledRole, extractMrepFromRoleOutput, verifyMrepReport } from '../mrep';
 import { getOrBuildReference, runGroundedJudge, formatJudgmentSummary } from '../grounded-judge';
 import { generateMarkdownReport, saveReportToProject } from '../reports';
+import { runPrescription } from '../prescription';
+import { emitPrescribing } from '../ws/progress';
 
 // Utility: truncate string to max length
 function truncate(str: string, maxLen: number): string {
@@ -502,13 +504,33 @@ async function runEvaluation(
       console.error(`[${evaluationId}] Failed to generate report:`, reportErr);
     }
 
-    // Phase 3: Reflection + Grounded Judge (non-blocking, parallel)
+    // Phase 3: Reflection + Grounded Judge + Prescription (non-blocking, parallel)
     if (roleResults.length > 0) {
       runReflectionPhase(evaluationId, projectPath, roleResults).catch(err => {
         console.error(`[${evaluationId}] Reflection failed:`, err);
       });
       runJudgePhase(evaluationId, projectPath, analysis, roleResults).catch(err => {
         console.error(`[${evaluationId}] Judge phase failed:`, err);
+      });
+      runPrescriptionPhase(evaluationId, projectPath, projectName, roleResults, {
+        structure: {
+          totalFiles: analysis.structure?.totalFiles,
+          totalLines: analysis.structure?.totalLines,
+          languages: analysis.structure?.languages,
+        },
+        api: { totalEndpoints: analysis.api?.totalEndpoints },
+        database: {
+          totalEntities: analysis.database?.totalEntities,
+          totalColumns: analysis.database?.totalColumns,
+          orms: analysis.database?.orms,
+        },
+        quality: {
+          ...analysis.quality,
+          hasDocker: analysis.quality?.hasDockerfile || analysis.quality?.hasDockerCompose,
+          hasLinting: analysis.quality?.hasLinter,
+        },
+      }).catch((err: unknown) => {
+        console.error(`[${evaluationId}] Prescription failed:`, err);
       });
     }
   } catch (error) {
@@ -626,6 +648,42 @@ async function runJudgePhase(
     console.log(`[${evaluationId}] Judge complete: overall=${judgment.overallScore}, coverage=${judgment.dimensions.coverage.score}`);
   } catch (error) {
     console.error(`[${evaluationId}] Judge phase error:`, error);
+  }
+}
+
+async function runPrescriptionPhase(
+  evaluationId: string,
+  projectPath: string,
+  projectName: string,
+  roleResults: RoleResult[],
+  analysisData: Record<string, any> | null,
+) {
+  try {
+    console.log(`[${evaluationId}] Starting prescription phase...`);
+    emitPrescribing(evaluationId);
+
+    // Convert RoleResult to the format expected by gap-extractor
+    const roleOutputs = roleResults
+      .filter(r => !r.role.startsWith('_'))
+      .map(r => ({
+        role: r.role,
+        score: r.score,
+        parsed: typeof r.details === 'string' ? JSON.parse(r.details) : (r.details || {}),
+      }));
+
+    const report = await runPrescription(
+      evaluationId,
+      projectPath,
+      projectName,
+      roleOutputs,
+      analysisData,
+    );
+
+    if (report) {
+      console.log(`[${evaluationId}] Prescription complete: ${report.prescriptions.length} plans generated`);
+    }
+  } catch (error) {
+    console.error(`[${evaluationId}] Prescription phase error:`, error);
   }
 }
 
