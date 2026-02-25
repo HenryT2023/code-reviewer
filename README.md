@@ -6,7 +6,7 @@ AI-powered project evaluation system with multi-role perspectives. Supports **st
 
 ### Multi-Role Evaluation
 
-9 built-in roles with customizable prompts:
+14 built-in roles with customizable prompts:
 
 | Role | Focus |
 |------|-------|
@@ -18,8 +18,12 @@ AI-powered project evaluation system with multi-role perspectives. Supports **st
 | 📈 **Growth** | User acquisition, retention, monetization strategy |
 | 💰 **Pricing** | Pricing model, revenue optimization, market fit |
 | 📊 **Data** | Data architecture, analytics, metrics design |
-| 🔴 **RedTeam** | Security vulnerabilities, attack vectors, risk assessment |
+| 🔴 **Skeptic** | Fake demand detection, fatal assumptions, over-engineering |
 | 🎯 **UserInterview** | Real user perspective with 8 Enneagram-based personas |
+| 👨‍💻 **Coder** | Code smell, hardcoding, maintainability, security audit |
+| 🔍 **FactChecker** | Anti-hallucination, evidence verification, cross-role consistency |
+| 🚀 **Delivery** | Project completion, task breakdown, risk management, CI/CD |
+| 🌏 **TradeExpert** | Trade flow completeness, compliance, risk control, evidence-anchored scoring |
 
 ### Evaluation Types
 
@@ -41,20 +45,35 @@ AI-powered project evaluation system with multi-role perspectives. Supports **st
 - **Synthesis**: Aggregate reflections to generate new roles and improve existing prompts
 - **Rerun API**: Backfill reflections for historical evaluations
 
-### Evolution Closed Loop (NEW)
+### Evolution Closed Loop
 
 - **MREP (Measurable, Referenceable, Evidence-based, Precise)**: Extract structured claims from role outputs with file/line references, then programmatically verify against actual codebase
 - **Grounded Judge**: AI judge scores evaluation quality using external knowledge-based checklists (coverage 40%, accuracy 25%, calibration 20%, specificity 15%)
 - **Prompt Override Layer**: Per-project prompt overrides from synthesis results, with version history and rollback support
 - **A/B Comparison**: Automated prompt effectiveness validation — runs baseline vs variant evaluations, compares judge scores, auto-applies if improvement exceeds threshold
 
+### Coverage Intelligence
+
+Deep test coverage analysis that goes beyond simple file counting:
+
+- **Module Graph**: Build source↔test mapping per top-level module with criticality ranking
+- **Coverage Reader**: Parse real coverage reports (lcov, cobertura, jacoco) when available; fall back to proxy metrics
+- **Test Taxonomy**: Classify tests as unit/integration/e2e, extract imports, count assertions, detect flaky risk
+- **Quality Metrics**: 6-dimension scoring — assert density, naming, flaky risk, isolation, duplication, dependency smell
+- **Composite Score**: `finalScore = 0.55 × coverageScore + 0.45 × qualityScore`
+- **Action Generator**: Auto-generate prioritized improvement suggestions (file/function-level)
+- **PR Gate**: Baseline comparison for CI integration (planned)
+- **Context Injection**: Coverage data automatically injected into technical role prompts (Architect, Coder, TradeExpert, Security)
+
 ### Static Analysis
 
 - API endpoint detection (Express, FastAPI, Django, Flask, Next.js, etc.)
-- Database entity & ORM detection (SQLAlchemy, TypeORM, Prisma, Sequelize, etc.)
+- Database entity & ORM detection (SQLAlchemy, SQLModel, TypeORM, Prisma, Sequelize, etc.)
 - Monorepo / multi-service recognition with per-service breakdown
-- Code quality metrics: complexity, language distribution, largest files, test coverage
+- Code quality metrics: complexity, language distribution, largest files
+- Coverage Intelligence: module-level test coverage, quality scoring, action items
 - Python engineering quality (pyproject.toml, Ruff, Black, MyPy, Alembic)
+- Test file detection: `test_*`, `*_test.*`, `*.spec.*`, `conftest.py`, `factories.py`
 
 ### Other Features
 
@@ -72,6 +91,7 @@ AI-powered project evaluation system with multi-role perspectives. Supports **st
 | Frontend | React 18, Vite, Ant Design 5 |
 | AI Models | DeepSeek V3 (default), Alibaba Qwen, OpenAI GPT-4 |
 | UI Testing | Playwright |
+| Testing | Jest, ts-jest |
 | Charts | ECharts |
 | Storage | JSON file-based persistence |
 
@@ -212,7 +232,19 @@ code-reviewer/
 │       │   ├── database.ts  #   Database & ORM detection
 │       │   ├── metrics.ts   #   Code metrics & complexity
 │       │   ├── quality.ts   #   Engineering quality checks
-│       │   └── structure.ts #   Project structure & monorepo
+│       │   ├── structure.ts #   Project structure & monorepo
+│       │   └── coverage/    #   Coverage Intelligence
+│       │       ├── index.ts         # Main entry & legacy adapter
+│       │       ├── types.ts         # Type definitions & config
+│       │       ├── module-graph.ts  # Source↔test module mapping
+│       │       ├── module-key.ts    # Module key normalization
+│       │       ├── coverage-reader.ts # lcov/cobertura/jacoco parser
+│       │       ├── test-taxonomy.ts # Test classification & analysis
+│       │       ├── quality-metrics.ts # 6-dimension quality scoring
+│       │       ├── scorer.ts        # Composite score calculation
+│       │       ├── gate.ts          # PR gate baseline comparison
+│       │       ├── action-generator.ts # Improvement suggestions
+│       │       └── __tests__/       # Unit tests & fixtures
 │       ├── eval/            # Dynamic & UI evaluation
 │       │   ├── runtime.ts   #   Server startup & API testing
 │       │   ├── ui.ts        #   Playwright UI flow testing
@@ -228,8 +260,10 @@ code-reviewer/
 │       │   └── metrics.ts   #   MREP quality metrics
 │       ├── prompt-overrides/ # Prompt override layer
 │       │   └── manager.ts   #   Override CRUD & rollback
+│       ├── reports/         # Report generation
+│       │   └── markdown-generator.ts  # Markdown report with Coverage Intelligence
 │       ├── routes/          # Express routes
-│       │   ├── evaluate.ts  #   Evaluation API
+│       │   ├── evaluate.ts  #   Evaluation API (+ coverage context injection)
 │       │   ├── evolution.ts #   Evolution API
 │       │   ├── judge.ts     #   Judge API
 │       │   ├── mrep.ts      #   MREP API
