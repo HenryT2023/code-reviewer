@@ -118,7 +118,7 @@ async function gatherDeepContext(
       } catch { /* skip */ }
     }
 
-    // Read a sample API route file
+    // Read multiple API route samples (spread across directory for diversity)
     const apiDir = path.join(svc.path, 'app', 'api');
     const srcApiDir = path.join(svc.path, 'src', 'api');
     const routesDir = path.join(svc.path, 'src', 'routes');
@@ -126,16 +126,22 @@ async function gatherDeepContext(
       if (!fs.existsSync(dir)) continue;
       try {
         const files = fs.readdirSync(dir).filter(f => 
-          (f.endsWith('.py') || f.endsWith('.ts')) && !f.startsWith('__')
+          (f.endsWith('.py') || f.endsWith('.ts')) && !f.startsWith('__') && !f.startsWith('index')
         );
         if (files.length > 0) {
-          const sampleFile = files[0];
-          const content = fs.readFileSync(path.join(dir, sampleFile), 'utf-8');
-          codeSamples.push({
-            file: `${svc.name}/${path.basename(dir)}/${sampleFile}`,
-            purpose: `${svc.name} API route sample`,
-            content: content.substring(0, 1500),
-          });
+          // Sample up to 3 files spread across the directory
+          const step = Math.max(1, Math.floor(files.length / 3));
+          const indices = [0, Math.min(step, files.length - 1), Math.min(step * 2, files.length - 1)];
+          const uniqueIndices = [...new Set(indices)].slice(0, 3);
+          for (const idx of uniqueIndices) {
+            const sampleFile = files[idx];
+            const content = fs.readFileSync(path.join(dir, sampleFile), 'utf-8');
+            codeSamples.push({
+              file: `${svc.name}/${path.basename(dir)}/${sampleFile}`,
+              purpose: `${svc.name} API route sample`,
+              content: content.substring(0, 1200),
+            });
+          }
         }
       } catch { /* skip */ }
       break;
@@ -162,6 +168,61 @@ async function gatherDeepContext(
             file: `${svc.name}/app/models/${modelFiles[0]}`,
             purpose: `${svc.name} data model sample`,
             content: content.substring(0, 1500),
+          });
+        }
+      } catch { /* skip */ }
+    }
+
+    // Read core/ business logic files (metrics, event tracking, PMF, reporting, etc.)
+    const coreDirs = [
+      path.join(svc.path, 'app', 'core'),
+      path.join(svc.path, 'src', 'core'),
+      path.join(svc.path, 'src', 'lib'),
+    ];
+    for (const coreDir of coreDirs) {
+      if (!fs.existsSync(coreDir)) continue;
+      try {
+        const coreFiles = fs.readdirSync(coreDir).filter(f =>
+          (f.endsWith('.py') || f.endsWith('.ts')) && !f.startsWith('__') && !f.startsWith('index')
+          && !['config.py', 'config.ts', 'settings.py'].includes(f)
+        );
+        // Sample up to 4 core files, spread evenly
+        const step = Math.max(1, Math.floor(coreFiles.length / 4));
+        const indices = [0, step, step * 2, step * 3].map(i => Math.min(i, coreFiles.length - 1));
+        const uniqueIndices = [...new Set(indices)].slice(0, 4);
+        for (const idx of uniqueIndices) {
+          const cf = coreFiles[idx];
+          const content = fs.readFileSync(path.join(coreDir, cf), 'utf-8');
+          codeSamples.push({
+            file: `${svc.name}/core/${cf}`,
+            purpose: `${svc.name} business logic`,
+            content: content.substring(0, 1200),
+          });
+        }
+      } catch { /* skip */ }
+      break;
+    }
+
+    // Read frontend components and hooks (React/Vue/Svelte)
+    const frontendDirs = [
+      path.join(svc.path, 'src', 'components'),
+      path.join(svc.path, 'src', 'hooks'),
+      path.join(svc.path, 'src', 'utils'),
+    ];
+    for (const feDir of frontendDirs) {
+      if (!fs.existsSync(feDir)) continue;
+      try {
+        const feFiles = fs.readdirSync(feDir).filter(f =>
+          (f.endsWith('.tsx') || f.endsWith('.ts') || f.endsWith('.vue') || f.endsWith('.svelte'))
+          && !f.startsWith('index')
+        );
+        // Sample up to 2 files per directory
+        for (const ff of feFiles.slice(0, 2)) {
+          const content = fs.readFileSync(path.join(feDir, ff), 'utf-8');
+          codeSamples.push({
+            file: `${svc.name}/${path.basename(feDir)}/${ff}`,
+            purpose: `${svc.name} frontend ${path.basename(feDir)}`,
+            content: content.substring(0, 1000),
           });
         }
       } catch { /* skip */ }
@@ -309,16 +370,27 @@ function generateSummary(
     '',
   );
 
-  // Documentation inventory — list key docs found in docs/ and specs/
+  // Documentation inventory — list key docs found in docs/ and specs/ (including subdirectories)
   const docsDirPath = path.join(structure.path, 'docs');
   if (fs.existsSync(docsDirPath)) {
     try {
-      const docFiles = fs.readdirSync(docsDirPath).filter(f => f.endsWith('.md'));
-      if (docFiles.length > 0) {
+      const allDocFiles: string[] = [];
+      const topFiles = fs.readdirSync(docsDirPath).filter(f => f.endsWith('.md'));
+      allDocFiles.push(...topFiles.map(f => `docs/${f}`));
+      // Scan subdirectories
+      const subDirs = fs.readdirSync(docsDirPath, { withFileTypes: true })
+        .filter(d => d.isDirectory()).map(d => d.name);
+      for (const sub of subDirs) {
+        try {
+          const subFiles = fs.readdirSync(path.join(docsDirPath, sub)).filter(f => f.endsWith('.md'));
+          allDocFiles.push(...subFiles.map(f => `docs/${sub}/${f}`));
+        } catch { /* skip */ }
+      }
+      if (allDocFiles.length > 0) {
         lines.push(
           '## 项目文档',
-          `共 ${docFiles.length} 篇文档:`,
-          ...docFiles.slice(0, 15).map(f => `  - docs/${f}`),
+          `共 ${allDocFiles.length} 篇文档:`,
+          ...allDocFiles.slice(0, 20).map(f => `  - ${f}`),
           '',
         );
       }
