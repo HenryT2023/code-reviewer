@@ -78,7 +78,7 @@ function setCachedResults(query: string, results: SearchResult[]): void {
 
 // ─── Brave Search API ───────────────────────────────────────────────────
 
-async function braveSearch(query: string, apiKey: string, count: number = 5): Promise<SearchResult[]> {
+export async function braveSearch(query: string, apiKey: string, count: number = 5): Promise<SearchResult[]> {
   return new Promise((resolve, reject) => {
     const params = new URLSearchParams({
       q: query,

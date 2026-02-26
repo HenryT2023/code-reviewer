@@ -28,6 +28,7 @@ import {
 import { isMrepEnabledRole, extractMrepFromRoleOutput, verifyMrepReport } from '../mrep';
 import { getOrBuildReference, runGroundedJudge, formatJudgmentSummary } from '../grounded-judge';
 import { generateMarkdownReport, saveReportToProject } from '../reports';
+import { getInterviewContextForEval } from '../interview-agent';
 import { runPrescription } from '../prescription';
 import { emitPrescribing } from '../ws/progress';
 
@@ -370,6 +371,9 @@ async function runEvaluation(
     // Build Coverage Intelligence context for technical roles
     const coverageContext = formatCoverageForRole(analysis.quality?.testCoverage);
 
+    // Build interview research context for user-facing roles
+    const interviewContext = getInterviewContextForEval(projectPath);
+
     // Phase 1: Run all role evaluations
     for (let i = 0; i < roles.length; i++) {
       const role = roles[i];
@@ -383,6 +387,11 @@ async function runEvaluation(
         // Inject coverage intelligence data for technical roles
         if (['architect', 'coder', 'trade_expert', 'security'].includes(role) && coverageContext) {
           fullContext = `${fullContext}\n\n${coverageContext}`;
+        }
+
+        // Inject interview research data for user-facing roles
+        if (['boss', 'user_interview', 'merchant', 'growth', 'pricing', 'operator'].includes(role) && interviewContext) {
+          fullContext = `${fullContext}${interviewContext}`;
         }
         
         const result = await evaluateWithRole(role, analysis.summary, fullContext, depth, mode, rolePrompts?.[role], projectPath);
