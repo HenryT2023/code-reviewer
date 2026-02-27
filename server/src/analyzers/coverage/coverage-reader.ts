@@ -405,6 +405,23 @@ export function readCoverageReportSync(projectPath: string): RealCoverage | null
     'htmlcov/lcov.info',
   ];
   
+  // Also scan service subdirectories for lcov (monorepo support)
+  try {
+    const serviceDirNames = ['services', 'packages', 'apps'];
+    for (const sd of serviceDirNames) {
+      const sdPath = path.join(projectPath, sd);
+      if (fs.existsSync(sdPath)) {
+        const subDirs = fs.readdirSync(sdPath, { withFileTypes: true });
+        for (const sub of subDirs) {
+          if (sub.isDirectory() && !sub.name.startsWith('.')) {
+            lcovPaths.push(`${sd}/${sub.name}/coverage/lcov.info`);
+            lcovPaths.push(`${sd}/${sub.name}/htmlcov/lcov.info`);
+          }
+        }
+      }
+    }
+  } catch { /* ignore */ }
+  
   for (const lcovPath of lcovPaths) {
     const fullPath = path.join(projectPath, lcovPath);
     if (fs.existsSync(fullPath)) {
@@ -413,13 +430,30 @@ export function readCoverageReportSync(projectPath: string): RealCoverage | null
     }
   }
   
-  // Try Cobertura XML
+  // Try Cobertura XML (including monorepo subdirectory patterns)
   const coberturaPaths = [
     'coverage.xml',
     'coverage/coverage.xml',
     'coverage/cobertura.xml',
     'target/site/cobertura/coverage.xml',
   ];
+  
+  // Scan service subdirectories for coverage.xml (monorepo support)
+  try {
+    const serviceDirNames2 = ['services', 'packages', 'apps'];
+    for (const sd of serviceDirNames2) {
+      const sdPath = path.join(projectPath, sd);
+      if (fs.existsSync(sdPath)) {
+        const subDirs = fs.readdirSync(sdPath, { withFileTypes: true });
+        for (const sub of subDirs) {
+          if (sub.isDirectory() && !sub.name.startsWith('.')) {
+            coberturaPaths.push(`${sd}/${sub.name}/coverage.xml`);
+            coberturaPaths.push(`${sd}/${sub.name}/coverage/coverage.xml`);
+          }
+        }
+      }
+    }
+  } catch { /* ignore */ }
   
   for (const cobPath of coberturaPaths) {
     const fullPath = path.join(projectPath, cobPath);

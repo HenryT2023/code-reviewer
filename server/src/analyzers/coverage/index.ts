@@ -237,6 +237,43 @@ export function convertToLegacyFormat(
     if (intelligence.meta.coverageSource === 'jacoco') coverageTools.push('jacoco');
   }
   
+  // Also detect coverage tools from config files (pyproject.toml, package.json)
+  // even if no real coverage report was found
+  if (coverageTools.length === 0 && intelligence.meta.projectType?.startsWith('python')) {
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      // Search for pyproject.toml files up to 3 levels deep
+      const findPyprojects = (dir: string, depth = 0): string[] => {
+        if (depth > 3) return [];
+        const results: string[] = [];
+        try {
+          const entries = fs.readdirSync(dir, { withFileTypes: true });
+          for (const e of entries) {
+            if (e.name === 'pyproject.toml' && e.isFile()) results.push(path.join(dir, e.name));
+            if (e.isDirectory() && !e.name.startsWith('.') && !['node_modules', '__pycache__', '.venv', 'venv'].includes(e.name)) {
+              results.push(...findPyprojects(path.join(dir, e.name), depth + 1));
+            }
+          }
+        } catch { /* ignore */ }
+        return results;
+      };
+      // Extract projectPath from module paths
+      const projectPath = intelligence.modules.length > 0 
+        ? path.dirname(intelligence.modules[0].path.replace(/\/[^/]+$/, ''))
+        : '';
+      if (projectPath) {
+        for (const f of findPyprojects(projectPath)) {
+          const content = fs.readFileSync(f, 'utf-8');
+          if (content.includes('pytest-cov') || content.includes('[tool.coverage]') || content.includes('--cov')) {
+            coverageTools.push('pytest-cov');
+            break;
+          }
+        }
+      }
+    } catch { /* ignore */ }
+  }
+  
   return {
     testFileCount: intelligence.overview.totalTestFiles,
     testFileRatio: intelligence.overview.testFileRatio,
@@ -340,8 +377,8 @@ export function analyzeCoverageIntelligenceSync(
 }
 
 // Simplified sync version of buildModuleGraph
+// Supports monorepo structures by recursing into subdirectories
 function buildModuleGraphSync(projectPath: string, testFiles: string[]): ModuleNode[] {
-  // Import the sync helper functions from module-graph
   const { detectPrimaryLanguage, calculateModuleMetrics, determineStatus, determineCriticality } = require('./module-graph');
   const fs = require('fs');
   const path = require('path');
@@ -349,6 +386,36 @@ function buildModuleGraphSync(projectPath: string, testFiles: string[]): ModuleN
   const modules: ModuleNode[] = [];
   const ignoreDirs = ['node_modules', '.venv', 'venv', '__pycache__', 'dist', 'build', '.git', 'test', 'tests', '__tests__'];
   const codeExtensions = ['.py', '.ts', '.tsx', '.js', '.jsx', '.java', '.go', '.rs'];
+  
+  // Check if a directory directly contains source code files (non-recursive)
+  function hasDirSourceFiles(dirPath: string): boolean {
+    try {
+      return fs.readdirSync(dirPath).some((f: string) =>
+        codeExtensions.some(ext => f.endsWith(ext))
+      );
+    } catch { return false; }
+  }
+  
+  // Add a directory as a module
+  function addModule(fullPath: string, name: string, relativePath: string) {
+    const metrics = calculateModuleMetrics(fullPath, testFiles, projectPath);
+    // Only add if the module has meaningful content (source files or test files)
+    if (metrics.sourceFiles > 0 || metrics.testFiles > 0) {
+      modules.push({
+        name,
+        key: normalizeModuleKey(name),
+        path: fullPath,
+        relativePath,
+        depth: 0,
+        parent: null,
+        language: detectPrimaryLanguage(fullPath),
+        metrics,
+        criticality: determineCriticality(name, relativePath),
+        status: determineStatus(metrics),
+        children: [],
+      });
+    }
+  }
   
   try {
     const entries = fs.readdirSync(projectPath, { withFileTypes: true });
@@ -358,29 +425,49 @@ function buildModuleGraphSync(projectPath: string, testFiles: string[]): ModuleN
       
       const fullPath = path.join(projectPath, entry.name);
       
-      // Check if directory contains source files
-      let hasSourceFiles = false;
-      try {
-        hasSourceFiles = fs.readdirSync(fullPath).some((f: string) => 
-          codeExtensions.some(ext => f.endsWith(ext))
-        );
-      } catch { /* ignore */ }
-      
-      if (hasSourceFiles) {
-        const metrics = calculateModuleMetrics(fullPath, testFiles, projectPath);
-        modules.push({
-          name: entry.name,
-          key: normalizeModuleKey(entry.name),
-          path: fullPath,
-          relativePath: entry.name,
-          depth: 0,
-          parent: null,
-          language: detectPrimaryLanguage(fullPath),
-          metrics,
-          criticality: determineCriticality(entry.name, entry.name),
-          status: determineStatus(metrics),
-          children: [],
-        });
+      if (hasDirSourceFiles(fullPath)) {
+        // Directory has direct source files — add as module
+        addModule(fullPath, entry.name, entry.name);
+      } else {
+        // No direct source files — check subdirectories (monorepo / services pattern)
+        // e.g. services/wms/, services/tradeos/
+        try {
+          const subEntries = fs.readdirSync(fullPath, { withFileTypes: true });
+          let addedSubModules = false;
+          
+          for (const subEntry of subEntries) {
+            if (!subEntry.isDirectory() || ignoreDirs.includes(subEntry.name) || subEntry.name.startsWith('.')) continue;
+            
+            const subFullPath = path.join(fullPath, subEntry.name);
+            const subRelativePath = `${entry.name}/${subEntry.name}`;
+            
+            // Check if this subdir or any of its children contain source files
+            const hasDirectSource = hasDirSourceFiles(subFullPath);
+            let hasNestedSource = false;
+            
+            if (!hasDirectSource) {
+              // Check one more level (e.g. services/wms/app/ or services/tradeos/src/)
+              try {
+                const deepEntries = fs.readdirSync(subFullPath, { withFileTypes: true });
+                hasNestedSource = deepEntries.some((de: any) => {
+                  if (!de.isDirectory() || ignoreDirs.includes(de.name)) return false;
+                  return hasDirSourceFiles(path.join(subFullPath, de.name));
+                });
+              } catch { /* ignore */ }
+            }
+            
+            if (hasDirectSource || hasNestedSource) {
+              addModule(subFullPath, subEntry.name, subRelativePath);
+              addedSubModules = true;
+            }
+          }
+          
+          // If no sub-modules were found, try adding the parent anyway
+          // (calculateModuleMetrics recursively scans so it may still find files)
+          if (!addedSubModules) {
+            addModule(fullPath, entry.name, entry.name);
+          }
+        } catch { /* ignore */ }
       }
     }
   } catch { /* ignore */ }
