@@ -25,6 +25,15 @@ interface RawGap {
 
 // ─── Category Classification ────────────────────────────────────────────
 
+const DOMAIN_EXPERT_ROLES = ['trade_expert', 'supply_chain_expert'];
+
+const DOMAIN_KEYWORDS = [
+  'supply chain', 'procurement', 'warehouse', 'wms', 'inventory', 'delivery',
+  'traceability', 'trade', 'logistics', 'cold chain', 'batch', 'fulfillment',
+  '供应链', '采购', '仓储', '库存', '配送', '溯源', '贸易', '物流',
+  '冷链', '批次', '履约', 'supplier', 'inbound', 'outbound', 'picking',
+];
+
 const VALIDATION_KEYWORDS = [
   'pmf', 'hypothesis', 'validate', 'interview', 'user research', 'market',
   'customer', 'retention', 'churn', 'nps', 'conversion', 'pricing model',
@@ -39,8 +48,11 @@ const INTEGRATION_KEYWORDS = [
   'third-party', 'external api', 'sentry', 'prometheus',
 ];
 
-function classifyGap(text: string): GapCategory {
+function classifyGap(text: string, sourceRole?: string): GapCategory {
   const lower = text.toLowerCase();
+  // Domain expert gaps get domain category if role or content matches
+  if (sourceRole && DOMAIN_EXPERT_ROLES.includes(sourceRole)) return 'domain';
+  if (DOMAIN_KEYWORDS.some(k => lower.includes(k))) return 'domain';
   if (VALIDATION_KEYWORDS.some(k => lower.includes(k))) return 'validation';
   if (INTEGRATION_KEYWORDS.some(k => lower.includes(k))) return 'integration';
   return 'code_fix';
@@ -51,6 +63,8 @@ function classifyGap(text: string): GapCategory {
 function extractFromRecommendations(role: string, parsed: Record<string, any>): RawGap[] {
   const gaps: RawGap[] = [];
   const recs: any[] = parsed.recommendations || parsed.priority_actions || [];
+  // Domain experts get boosted priority (75) so their recommendations aren't drowned by generic gaps
+  const basePriority = DOMAIN_EXPERT_ROLES.includes(role) ? 75 : 50;
 
   for (const rec of recs) {
     const text = typeof rec === 'string' ? rec : (rec.action || rec.description || rec.title || JSON.stringify(rec));
@@ -58,8 +72,8 @@ function extractFromRecommendations(role: string, parsed: Record<string, any>): 
       title: text.substring(0, 80),
       description: text,
       sourceRole: role,
-      priority: 50,
-      category: classifyGap(text),
+      priority: basePriority,
+      category: classifyGap(text, role),
       evidence: [text],
     });
   }
@@ -69,14 +83,16 @@ function extractFromRecommendations(role: string, parsed: Record<string, any>): 
 function extractFromCriticalGaps(role: string, parsed: Record<string, any>): RawGap[] {
   const gaps: RawGap[] = [];
   const criticalGaps: string[] = parsed.critical_gaps || [];
+  // Domain expert critical gaps get slightly higher priority (85 vs 80)
+  const basePriority = DOMAIN_EXPERT_ROLES.includes(role) ? 85 : 80;
 
   for (const gap of criticalGaps) {
     gaps.push({
       title: gap.substring(0, 80),
       description: gap,
       sourceRole: role,
-      priority: 80,
-      category: classifyGap(gap),
+      priority: basePriority,
+      category: classifyGap(gap, role),
       evidence: [gap],
     });
   }
@@ -96,7 +112,7 @@ function extractFromLowDimensions(role: string, parsed: Record<string, any>): Ra
         description: text,
         sourceRole: role,
         priority: 90 - dim.score, // lower score = higher priority
-        category: classifyGap(text),
+        category: classifyGap(text, role),
         evidence: [text],
       });
     }
@@ -116,7 +132,7 @@ function extractFromMrepClaims(role: string, parsed: Record<string, any>): RawGa
         description: text,
         sourceRole: role,
         priority: claim.severity === 'critical' ? 90 : 70,
-        category: classifyGap(text),
+        category: classifyGap(text, role),
         evidence: [`[${claim.type}] ${text}`],
         relatedFiles: claim.file ? [claim.file] : undefined,
       });
@@ -207,14 +223,14 @@ export function extractGaps(roleOutputs: RoleOutput[], maxGaps: number = 6): Gap
   deduped.sort((a, b) => b.priority - a.priority);
 
   // Ensure at least 1 gap per category if available
-  const byCategory: Record<GapCategory, RawGap[]> = { code_fix: [], validation: [], integration: [] };
+  const byCategory: Record<GapCategory, RawGap[]> = { code_fix: [], validation: [], integration: [], domain: [] };
   for (const gap of deduped) {
     byCategory[gap.category].push(gap);
   }
 
   const selected: RawGap[] = [];
   // Pick top 1 from each category first
-  for (const cat of ['code_fix', 'validation', 'integration'] as GapCategory[]) {
+  for (const cat of ['code_fix', 'validation', 'integration', 'domain'] as GapCategory[]) {
     if (byCategory[cat].length > 0) {
       selected.push(byCategory[cat].shift()!);
     }

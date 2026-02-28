@@ -5,7 +5,7 @@
 
 // ─── Gap Types ──────────────────────────────────────────────────────────
 
-export type GapCategory = 'code_fix' | 'validation' | 'integration';
+export type GapCategory = 'code_fix' | 'validation' | 'integration' | 'domain';
 export type GapPriority = 'critical' | 'high' | 'medium' | 'low';
 
 export interface Gap {

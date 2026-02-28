@@ -58,6 +58,13 @@ function getCategoryGuidance(category: string): string {
 - 环境变量配置
 - 错误处理和降级方案
 - 健康检查集成`;
+    case 'domain':
+      return `重点：行业领域专属修复。Plan 步骤应该：
+- 引用具体的实体/表结构改动（如添加 TypeORM 关联、新增字段）
+- 涉及业务流程补全（如采购→入库→出库→配送的端到端链路）
+- 包含领域特定的合规要求（如食安、冷链、溯源、贸易合规）
+- 给出具体的 Service 方法和 API 端点设计
+不要写泛泛的"建议加强供应链管理"，要写具体的实体、字段、方法。`;
     default:
       return '';
   }
