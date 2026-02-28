@@ -385,7 +385,7 @@ async function runEvaluation(
         let fullContext = runtimeContext ? `${context}\n${runtimeContext}` : context;
         
         // Inject coverage intelligence data for technical roles
-        if (['architect', 'coder', 'trade_expert', 'security'].includes(role) && coverageContext) {
+        if (['architect', 'coder', 'trade_expert', 'supply_chain_expert', 'security'].includes(role) && coverageContext) {
           fullContext = `${fullContext}\n\n${coverageContext}`;
         }
 

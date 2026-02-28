@@ -203,6 +203,13 @@ async function buildSearchQueries(gaps: Gap[]): Promise<SearchQuery[]> {
       enSources.push('reddit-importing');
     }
 
+    // Add supply chain sources if gap involves food supply chain domain
+    const hasSupplyChainRole = gap.sourceRoles.some(r => r === 'supply_chain_expert');
+    if (hasSupplyChainRole) {
+      cnSources.push('zhihu', 'juejin');
+      enSources.push('reddit-supplychain', 'stackoverflow');
+    }
+
     queries.push({
       gapId: pair.gapId,
       query: pair.en,
