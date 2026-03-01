@@ -24,7 +24,7 @@ export interface Gap {
 // ─── Community Search Types ─────────────────────────────────────────────
 
 export type CommunityLanguage = 'en' | 'cn';
-export type CommunityDomain = 'general' | 'trade' | 'saas' | 'startup';
+export type CommunityDomain = 'general' | 'trade' | 'saas' | 'startup' | 'supply_chain';
 
 export interface CommunitySource {
   id: string;

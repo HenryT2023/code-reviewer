@@ -30,6 +30,9 @@ const SOURCES: CommunitySource[] = [
   { id: 'fob', name: '福步外贸论坛', siteFilter: 'site:fob.vip', language: 'cn', domain: 'trade' },
   { id: 'waimaoquan', name: '阿里外贸圈', siteFilter: 'site:waimaoquan.alibaba.com', language: 'cn', domain: 'trade' },
   { id: 'reddit-importing', name: 'Reddit r/importing', siteFilter: 'site:reddit.com/r/importing', language: 'en', domain: 'trade' },
+  // Supply chain specific
+  { id: 'reddit-supplychain', name: 'Reddit r/supplychain', siteFilter: 'site:reddit.com/r/supplychain', language: 'en', domain: 'supply_chain' },
+  { id: 'reddit-logistics', name: 'Reddit r/logistics', siteFilter: 'site:reddit.com/r/logistics', language: 'en', domain: 'supply_chain' },
 ];
 
 export function getAllSources(): CommunitySource[] {
@@ -190,11 +193,15 @@ async function buildSearchQueries(gaps: Gap[]): Promise<SearchQuery[]> {
       ? ['indiehackers', 'reddit-saas', 'reddit-startups']
       : gap.category === 'integration'
         ? ['stackoverflow', 'devto']
-        : ['stackoverflow', 'reddit-saas', 'hackernews'];
+        : gap.category === 'domain'
+          ? ['stackoverflow', 'reddit-supplychain', 'reddit-logistics']
+          : ['stackoverflow', 'reddit-saas', 'hackernews'];
 
     const cnSources = gap.category === 'validation'
       ? ['zhihu', 'v2ex']
-      : ['zhihu', 'juejin', 'segmentfault'];
+      : gap.category === 'domain'
+        ? ['zhihu', 'juejin', 'segmentfault']
+        : ['zhihu', 'juejin', 'segmentfault'];
 
     // Add trade sources if gap involves trade domain
     const hasTradeRole = gap.sourceRoles.some(r => r === 'trade_expert');
@@ -254,6 +261,7 @@ async function consultLlmExpert(gap: Gap): Promise<string> {
   try {
     const categoryLabel = gap.category === 'code_fix' ? '产品完整性'
       : gap.category === 'validation' ? '市场验证'
+      : gap.category === 'domain' ? '行业领域（供应链/贸易）'
       : '外部集成';
 
     const response = await callQwen([
