@@ -696,6 +696,62 @@ async function runPrescriptionPhase(
   }
 }
 
+// Re-run prescription phase for an already-completed evaluation
+router.post('/:id/re-prescribe', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const evaluation = getEvaluation(id);
+    if (!evaluation) {
+      return res.status(404).json({ error: 'Evaluation not found' });
+    }
+    if (evaluation.status !== 'completed') {
+      return res.status(400).json({ error: `Evaluation status is '${evaluation.status}', must be 'completed'` });
+    }
+
+    const roleEvaluations = getRoleEvaluations(id);
+    if (roleEvaluations.length === 0) {
+      return res.status(400).json({ error: 'No role evaluations found' });
+    }
+
+    const analysisData = evaluation.analysisData ? JSON.parse(evaluation.analysisData) : null;
+    const roleResults: RoleResult[] = roleEvaluations.map(re => ({
+      role: re.role,
+      score: re.score ?? 0,
+      summary: re.summary || '',
+      details: re.details ? JSON.parse(re.details) : {},
+    }));
+
+    res.json({ status: 'started', evaluationId: id, message: 'Prescription phase re-triggered' });
+
+    // Run async — won't block the response
+    runPrescriptionPhase(id, evaluation.projectPath, evaluation.projectName, roleResults, {
+      structure: {
+        totalFiles: analysisData?.structure?.totalFiles,
+        totalLines: analysisData?.structure?.totalLines,
+        languages: analysisData?.structure?.languages,
+      },
+      api: { totalEndpoints: analysisData?.api?.totalEndpoints },
+      database: {
+        totalEntities: analysisData?.database?.totalEntities,
+        totalColumns: analysisData?.database?.totalColumns,
+        orms: analysisData?.database?.orms,
+      },
+      quality: {
+        ...analysisData?.quality,
+        hasDocker: analysisData?.quality?.hasDockerfile || analysisData?.quality?.hasDockerCompose,
+        hasLinting: analysisData?.quality?.hasLinter,
+      },
+    }).then(() => {
+      console.log(`[${id}] Re-prescription completed`);
+    }).catch((err: unknown) => {
+      console.error(`[${id}] Re-prescription failed:`, err);
+    });
+  } catch (error) {
+    console.error('Re-prescribe error:', error);
+    res.status(500).json({ error: 'Failed to re-trigger prescription' });
+  }
+});
+
 router.get('/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
