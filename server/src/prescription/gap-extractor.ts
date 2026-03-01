@@ -187,6 +187,10 @@ function deduplicateGaps(gaps: RawGap[]): RawGap[] {
       if (!existing.sourceRole.includes(gap.sourceRole)) {
         existing.sourceRole += `, ${gap.sourceRole}`;
       }
+      // Prefer 'domain' category when merging — domain expert classification is more specific
+      if (gap.category === 'domain' && existing.category !== 'domain') {
+        existing.category = 'domain';
+      }
     } else {
       seen.set(key, { ...gap });
     }
