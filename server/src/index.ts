@@ -4,9 +4,14 @@ import * as path from 'path';
 import * as dotenv from 'dotenv';
 import { createServer } from 'http';
 
-dotenv.config({ path: path.join(process.cwd(), '../.env') });
-dotenv.config({ path: path.join(process.cwd(), '.env') });
-dotenv.config();
+// `override: true` is deliberate. Without it, any shell that exports an
+// empty ANTHROPIC_API_KEY / DEEPSEEK_API_KEY (e.g. a well-meaning .zshrc
+// template with `export ANTHROPIC_API_KEY=`) silently wins over the .env
+// file and the server reports "provider not configured" even though the
+// .env value is right there. Override lets the .env file always win.
+dotenv.config({ path: path.join(process.cwd(), '../.env'), override: true });
+dotenv.config({ path: path.join(process.cwd(), '.env'), override: true });
+dotenv.config({ override: true });
 
 import evaluateRouter from './routes/evaluate';
 import historyRouter from './routes/history';

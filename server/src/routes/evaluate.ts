@@ -595,34 +595,46 @@ async function runEvaluationInner(
       console.error(`[${evaluationId}] Failed to generate report:`, reportErr);
     }
 
-    // Phase 3: Reflection + Grounded Judge + Prescription (non-blocking, parallel)
+    // Phase 3: Reflection + Grounded Judge + Prescription.
+    //
+    // These phases run in parallel with each other but are awaited together
+    // via Promise.allSettled. They cannot be fire-and-forget because each
+    // one opens spans under the outer withTrace scope — if runEvaluationInner
+    // returns before they finish, the tracer persists the trace with those
+    // spans still open (missing endMs) and we lose their observability
+    // entirely. The HTTP response to /api/evaluate was already sent long ago
+    // (emitCompleted fires above), so awaiting here does NOT delay the
+    // user-visible "evaluation completed" signal — only when trace.json and
+    // the runEvaluation promise finally resolve.
     if (roleResults.length > 0) {
-      runReflectionPhase(evaluationId, projectPath, roleResults).catch(err => {
-        console.error(`[${evaluationId}] Reflection failed:`, err);
-      });
-      runJudgePhase(evaluationId, projectPath, analysis, roleResults).catch(err => {
-        console.error(`[${evaluationId}] Judge phase failed:`, err);
-      });
-      runPrescriptionPhase(evaluationId, projectPath, projectName, roleResults, {
-        structure: {
-          totalFiles: analysis.structure?.totalFiles,
-          totalLines: analysis.structure?.totalLines,
-          languages: analysis.structure?.languages,
-        },
-        api: { totalEndpoints: analysis.api?.totalEndpoints },
-        database: {
-          totalEntities: analysis.database?.totalEntities,
-          totalColumns: analysis.database?.totalColumns,
-          orms: analysis.database?.orms,
-        },
-        quality: {
-          ...analysis.quality,
-          hasDocker: analysis.quality?.hasDockerfile || analysis.quality?.hasDockerCompose,
-          hasLinting: analysis.quality?.hasLinter,
-        },
-      }).catch((err: unknown) => {
-        console.error(`[${evaluationId}] Prescription failed:`, err);
-      });
+      await Promise.allSettled([
+        runReflectionPhase(evaluationId, projectPath, roleResults).catch(err => {
+          console.error(`[${evaluationId}] Reflection failed:`, err);
+        }),
+        runJudgePhase(evaluationId, projectPath, analysis, roleResults).catch(err => {
+          console.error(`[${evaluationId}] Judge phase failed:`, err);
+        }),
+        runPrescriptionPhase(evaluationId, projectPath, projectName, roleResults, {
+          structure: {
+            totalFiles: analysis.structure?.totalFiles,
+            totalLines: analysis.structure?.totalLines,
+            languages: analysis.structure?.languages,
+          },
+          api: { totalEndpoints: analysis.api?.totalEndpoints },
+          database: {
+            totalEntities: analysis.database?.totalEntities,
+            totalColumns: analysis.database?.totalColumns,
+            orms: analysis.database?.orms,
+          },
+          quality: {
+            ...analysis.quality,
+            hasDocker: analysis.quality?.hasDockerfile || analysis.quality?.hasDockerCompose,
+            hasLinting: analysis.quality?.hasLinter,
+          },
+        }).catch((err: unknown) => {
+          console.error(`[${evaluationId}] Prescription failed:`, err);
+        }),
+      ]);
     }
   } catch (error) {
     console.error('Evaluation failed:', error);

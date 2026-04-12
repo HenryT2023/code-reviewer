@@ -531,9 +531,11 @@ export async function chat(
   };
 
   // Wrap the entire chat() invocation (including retries) in a single span.
-  // If no trace is active, withSpan is a cheap pass-through. Span attributes
-  // include `callSite` up-front so a failed trace still tells you what it was.
-  const spanName = options.callSite ?? `chat:${provider}`;
+  // If no trace is active, withSpan is a cheap pass-through. The span is
+  // named `llm:<provider>` (NOT callSite) so that a nested chat call under
+  // a `role:architect` parent doesn't duplicate the parent's name in the
+  // tree. The callSite is still recorded as a span attribute for slicing.
+  const spanName = `llm:${provider}`;
   return withSpan(
     spanName,
     async () => {
