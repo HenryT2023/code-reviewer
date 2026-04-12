@@ -1,0 +1,12 @@
+node_modules
+server/node_modules
+server/dist
+server/data
+server/coverage
+web/node_modules
+web/dist
+.claude
+.git
+*.md
+.env
+.env.*
