@@ -83,17 +83,29 @@ Deep test coverage analysis that goes beyond simple file counting:
 - **Report Export**: Markdown and JSON export formats
 - **Trend Analysis**: Track project improvement over time
 
+### LLM Infrastructure (Harness Engineering)
+
+- **Multi-provider routing**: DeepSeek V3, Claude Sonnet/Opus 4.6, OpenAI GPT-4o — auto-detected from env vars or per-request override
+- **Prompt caching**: Claude requests mark shared analysis prefix with `cache_control: ephemeral`, achieving ~97% cache hit rate on roles 2-N
+- **Per-role context filter**: each role receives only the analysis sections it needs (boss gets overview+docs, architect gets everything, trade_expert gets API+DB+specs) — saves 40-77% input tokens
+- **Retry + backoff**: all LLM calls retry on 429/5xx with exponential backoff + jitter
+- **Usage tracking**: per-evaluation token accounting by callSite, exposed via `GET /api/usage/:evaluationId`
+- **Trace observability**: AsyncLocalStorage-based span tree for every evaluation — analyze/role/debate/judge/prescription phases visible with timing, tokens, and cache metrics via `GET /api/trace/:evaluationId`
+- **Prompt injection defense**: user-controlled `context` wrapped in `<user_context>` boundary, safety footer on all system prompts, 15-payload injection corpus tested
+
 ## Tech Stack
 
 | Layer | Technology |
 |-------|------------|
 | Backend | Node.js, Express, TypeScript |
 | Frontend | React 18, Vite, Ant Design 5 |
-| AI Models | DeepSeek V3 (default), Alibaba Qwen, OpenAI GPT-4 |
+| AI Models | Claude Sonnet 4.6, DeepSeek V3, OpenAI GPT-4o (multi-provider) |
+| AI SDKs | @anthropic-ai/sdk, openai |
 | UI Testing | Playwright |
-| Testing | Jest, ts-jest |
+| Testing | Jest, ts-jest (87 tests) |
 | Charts | ECharts |
 | Storage | JSON file-based persistence |
+| Deployment | Docker, pm2, Alibaba Cloud ECS |
 
 ## Quick Start
 
@@ -267,7 +279,11 @@ code-reviewer/
 │       │   ├── evolution.ts #   Evolution API
 │       │   ├── judge.ts     #   Judge API
 │       │   ├── mrep.ts      #   MREP API
-│       │   └── ab-test.ts   #   A/B Test API
+│       │   ├── ab-test.ts   #   A/B Test API
+│       │   ├── usage.ts     #   Token usage aggregation API
+│       │   └── trace.ts     #   Trace/span viewer API
+│       ├── observability/   # Trace & span tracking
+│       │   └── tracer.ts    #   AsyncLocalStorage-based span tree
 │       └── ws/              # WebSocket progress events
 ├── web/                     # Frontend (React + Vite + Ant Design)
 │   └── src/
@@ -281,13 +297,41 @@ code-reviewer/
 
 ```env
 # AI Model API Keys (at least one required)
-DEEPSEEK_API_KEY=your-deepseek-api-key    # Recommended (default)
-DASHSCOPE_API_KEY=your-qwen-api-key
-OPENAI_API_KEY=your-openai-api-key
+DEEPSEEK_API_KEY=your-deepseek-api-key    # Cheapest, recommended for development
+ANTHROPIC_API_KEY=your-anthropic-api-key  # Claude Sonnet 4.6, best quality + prompt caching
+OPENAI_API_KEY=your-openai-api-key        # GPT-4o, automatic prompt caching
+
+# Optional: force a specific provider (default: auto-detect from available keys)
+# AI_PROVIDER=claude
 
 # Server Port
 PORT=9000
 ```
+
+## Deployment
+
+### One-shot deploy to Linux server (ECS / VPS)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/HenryT2023/code-reviewer/main/deploy.sh | bash
+```
+
+Installs Node.js 20 if needed, clones repo, builds, sets up pm2. Edit `/opt/code-reviewer/.env` with your API keys afterwards.
+
+### Docker
+
+```bash
+docker build -t code-reviewer .
+docker run -d --name code-reviewer -p 9000:9000 --env-file .env code-reviewer
+```
+
+### Observability Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/usage` | Global token usage summary |
+| GET | `/api/usage/:evaluationId` | Per-evaluation usage by callSite |
+| GET | `/api/trace/:evaluationId` | Full trace tree (spans, timings, token counts) |
 
 ## License
 
