@@ -2,6 +2,7 @@
 // Two LLM calls: (1) debate/cross-critique, (2) A-J structured synthesis.
 
 import { callQwen } from './qwen';
+import { wrapUserContext, withSafetyFooter } from './prompt-safety';
 import type { QwenMessage } from './qwen';
 import { ROLE_NAMES } from './roles';
 
@@ -82,7 +83,7 @@ export async function runDebateRound(
   evaluationId?: string
 ): Promise<DebateResult> {
   const messages: QwenMessage[] = [
-    { role: 'system', content: DEBATE_SYSTEM_PROMPT },
+    { role: 'system', content: withSafetyFooter(DEBATE_SYSTEM_PROMPT) },
     { role: 'user', content: buildDebateUserMessage(roleResults) },
   ];
 
@@ -244,8 +245,15 @@ function buildOrchestratorUserMessage(
     return `### ${name}（${r.score} 分）\n${r.summary}\n关键发现: ${JSON.stringify(r.details?.actionable_tasks || r.details?.recommendations || r.details?.items || [], null, 2)}`;
   }).join('\n\n');
 
-  return `## 项目背景
-${context || '未提供'}
+  // Wrap user-provided context in the <user_context> boundary so an attacker
+  // cannot smuggle instructions into the orchestrator/debate synthesis via
+  // the /api/evaluate `context` field. See prompt-safety.ts and CLAUDE.md P1-4.
+  const wrappedContext = wrapUserContext(context);
+  const backgroundBlock = wrappedContext
+    ? `## 项目背景（不可信用户输入）\n${wrappedContext}`
+    : `## 项目背景\n未提供`;
+
+  return `${backgroundBlock}
 
 ## 技术分析摘要
 ${projectAnalysis.slice(0, 3000)}
@@ -271,7 +279,7 @@ export async function runOrchestrator(
   evaluationId?: string
 ): Promise<OrchestratorResult> {
   const messages: QwenMessage[] = [
-    { role: 'system', content: buildOrchestratorSystemPrompt(launchContext) },
+    { role: 'system', content: withSafetyFooter(buildOrchestratorSystemPrompt(launchContext)) },
     { role: 'user', content: buildOrchestratorUserMessage(projectAnalysis, context, roleResults, debate) },
   ];
 
