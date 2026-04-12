@@ -20,6 +20,7 @@
 import https from 'https';
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
+import { withSpan, setSpanAttributes } from '../observability/tracer';
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -529,30 +530,55 @@ export async function chat(
     }
   };
 
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
-    try {
-      const { content, usage } = await callOnce();
-      recordUsage({
-        evaluationId: options.evaluationId,
-        callSite: options.callSite,
+  // Wrap the entire chat() invocation (including retries) in a single span.
+  // If no trace is active, withSpan is a cheap pass-through. Span attributes
+  // include `callSite` up-front so a failed trace still tells you what it was.
+  const spanName = options.callSite ?? `chat:${provider}`;
+  return withSpan(
+    spanName,
+    async () => {
+      setSpanAttributes({
         provider,
         model,
-        inputTokens: usage.inputTokens,
-        outputTokens: usage.outputTokens,
-        cacheReadInputTokens: usage.cacheReadInputTokens,
-        cacheCreationInputTokens: usage.cacheCreationInputTokens,
-        at: Date.now(),
+        temperature,
+        maxTokens,
+        callSite: options.callSite,
       });
-      return { content, provider, model, usage, retries: attempt - 1 };
-    } catch (err) {
-      lastError = err;
-      const retryable = err instanceof RetryableError;
-      if (!retryable || attempt > maxRetries) {
-        throw err;
+
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+        try {
+          const { content, usage } = await callOnce();
+          recordUsage({
+            evaluationId: options.evaluationId,
+            callSite: options.callSite,
+            provider,
+            model,
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            cacheReadInputTokens: usage.cacheReadInputTokens,
+            cacheCreationInputTokens: usage.cacheCreationInputTokens,
+            at: Date.now(),
+          });
+          setSpanAttributes({
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            cacheReadInputTokens: usage.cacheReadInputTokens,
+            cacheCreationInputTokens: usage.cacheCreationInputTokens,
+            retries: attempt - 1,
+          });
+          return { content, provider, model, usage, retries: attempt - 1 };
+        } catch (err) {
+          lastError = err;
+          const retryable = err instanceof RetryableError;
+          if (!retryable || attempt > maxRetries) {
+            throw err;
+          }
+          await sleep(backoffDelayMs(attempt));
+        }
       }
-      await sleep(backoffDelayMs(attempt));
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+      throw lastError instanceof Error ? lastError : new Error(String(lastError));
+    },
+    { provider, model, callSite: options.callSite }
+  );
 }

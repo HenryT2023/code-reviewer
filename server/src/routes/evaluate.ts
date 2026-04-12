@@ -2,6 +2,8 @@ import { Router, Request, Response } from 'express';
 import { analyzeProject } from '../analyzers';
 import { evaluateWithRole } from '../ai/qwen';
 import type { Provider } from '../ai/client';
+import { filterAnalysisForRole } from '../ai/context-filter';
+import { withTrace, withSpan, setSpanAttributes } from '../observability/tracer';
 import { runDebateRound, runOrchestrator } from '../ai/orchestrator';
 import { runReflection } from '../ai/role-evolution';
 import type { RoleResult, LaunchContext } from '../ai/orchestrator';
@@ -352,6 +354,43 @@ async function runEvaluation(
   rolePrompts?: Record<string, string>,
   provider?: Provider
 ) {
+  // Wrap the entire evaluation in a trace. Every LLM call in chat() nests
+  // automatically under the root span via AsyncLocalStorage, and phase-level
+  // spans below add structure so a trace viewer can show analyze / per-role /
+  // debate / synthesis as separate phases.
+  return withTrace(
+    'evaluate',
+    evaluationId,
+    () => runEvaluationInner(
+      evaluationId,
+      projectPath,
+      projectName,
+      roles,
+      context,
+      depth,
+      mode,
+      evaluationType,
+      launchContext,
+      rolePrompts,
+      provider
+    ),
+    { projectName, depth, mode, evaluationType, roleCount: roles.length }
+  );
+}
+
+async function runEvaluationInner(
+  evaluationId: string,
+  projectPath: string,
+  projectName: string,
+  roles: string[],
+  context: string,
+  depth: 'quick' | 'deep',
+  mode: 'standard' | 'launch-ready',
+  evaluationType: EvaluationType,
+  launchContext: LaunchContext | undefined,
+  rolePrompts: Record<string, string> | undefined,
+  provider: Provider | undefined
+) {
   let runtimeProcess: { kill: () => Promise<void> } | undefined;
   let runtimeContext = '';
 
@@ -361,7 +400,11 @@ async function runEvaluation(
     emitAnalyzing(evaluationId);
 
     console.log(`[${evaluationId}] Starting ${depth} ${mode} analysis of ${projectName} (evalType: ${evaluationType})...`);
-    const analysis = await analyzeProject(projectPath, depth);
+    const analysis = await withSpan(
+      'analyze',
+      () => analyzeProject(projectPath, depth),
+      { depth }
+    );
     console.log(`[${evaluationId}] Analysis complete: ${analysis.api.totalEndpoints} endpoints, ${analysis.database.totalEntities} entities, ${analysis.metrics.totalFiles} files`);
     
     updateEvaluationStatus(evaluationId, 'evaluating', JSON.stringify(analysis));
@@ -388,10 +431,10 @@ async function runEvaluation(
       try {
         console.log(`[${evaluationId}] Evaluating with role: ${role} (${depth} ${mode} mode)`);
         emitEvaluatingRole(evaluationId, role, i, roles.length);
-        
+
         // Combine original context with runtime evaluation context
         let fullContext = runtimeContext ? `${context}\n${runtimeContext}` : context;
-        
+
         // Inject coverage intelligence data for technical roles
         if (['architect', 'coder', 'trade_expert', 'supply_chain_expert', 'security'].includes(role) && coverageContext) {
           fullContext = `${fullContext}\n\n${coverageContext}`;
@@ -401,17 +444,32 @@ async function runEvaluation(
         if (['boss', 'user_interview', 'merchant', 'growth', 'pricing', 'operator'].includes(role) && interviewContext) {
           fullContext = `${fullContext}${interviewContext}`;
         }
-        
-        const result = await evaluateWithRole(
-          role,
-          analysis.summary,
-          fullContext,
-          depth,
-          mode,
-          rolePrompts?.[role],
-          projectPath,
-          evaluationId,
-          provider
+
+        const result = await withSpan(
+          `role:${role}`,
+          async () => {
+            // Per-role context filter (P1-2): prune analysis sections the
+            // role doesn't need. Records bytes saved as span attributes so
+            // the savings are visible in the trace viewer.
+            const filteredAnalysis = filterAnalysisForRole(role, analysis.summary);
+            setSpanAttributes({
+              analysisInputChars: filteredAnalysis.length,
+              analysisOriginalChars: analysis.summary.length,
+              contextInputChars: fullContext.length,
+            });
+            return evaluateWithRole(
+              role,
+              filteredAnalysis,
+              fullContext,
+              depth,
+              mode,
+              rolePrompts?.[role],
+              projectPath,
+              evaluationId,
+              provider
+            );
+          },
+          { role }
         );
         const { score, summary, parsed } = parseRoleResult(result);
 
@@ -452,7 +510,10 @@ async function runEvaluation(
         // Debate round
         console.log(`[${evaluationId}] Starting debate round...`);
         emitDebating(evaluationId);
-        const debate = await runDebateRound(roleResults, evaluationId);
+        const debate = await withSpan(
+          'debate',
+          () => runDebateRound(roleResults, evaluationId)
+        );
         saveRoleEvaluation(
           evaluationId, '_debate', 0,
           debate.summary,
@@ -463,8 +524,11 @@ async function runEvaluation(
         // Orchestrator synthesis
         console.log(`[${evaluationId}] Starting orchestrator synthesis...`);
         emitOrchestrating(evaluationId);
-        const orchestrated = await runOrchestrator(
-          analysis.summary, context, roleResults, debate, launchContext || {}, evaluationId
+        const orchestrated = await withSpan(
+          'orchestrate',
+          () => runOrchestrator(
+            analysis.summary, context, roleResults, debate, launchContext || {}, evaluationId
+          )
         );
         const orchScore = (orchestrated.structured_json as any).overall_score || 0;
         saveRoleEvaluation(
