@@ -77,13 +77,19 @@ ${parts.join('\n\n---\n\n')}
 请对比分析以上所有角色的观点，找出共识和分歧，进行仲裁。`;
 }
 
-export async function runDebateRound(roleResults: RoleResult[]): Promise<DebateResult> {
+export async function runDebateRound(
+  roleResults: RoleResult[],
+  evaluationId?: string
+): Promise<DebateResult> {
   const messages: QwenMessage[] = [
     { role: 'system', content: DEBATE_SYSTEM_PROMPT },
     { role: 'user', content: buildDebateUserMessage(roleResults) },
   ];
 
-  const raw = await callQwen(messages, 'deepseek-chat', 8000);
+  const raw = await callQwen(messages, 'deepseek-chat', 8000, {
+    callSite: 'orchestrator:debate',
+    evaluationId,
+  });
 
   try {
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
@@ -261,14 +267,18 @@ export async function runOrchestrator(
   context: string,
   roleResults: RoleResult[],
   debate: DebateResult,
-  launchContext: LaunchContext
+  launchContext: LaunchContext,
+  evaluationId?: string
 ): Promise<OrchestratorResult> {
   const messages: QwenMessage[] = [
     { role: 'system', content: buildOrchestratorSystemPrompt(launchContext) },
     { role: 'user', content: buildOrchestratorUserMessage(projectAnalysis, context, roleResults, debate) },
   ];
 
-  const raw = await callQwen(messages, 'deepseek-chat', 8000);
+  const raw = await callQwen(messages, 'deepseek-chat', 8000, {
+    callSite: 'orchestrator:synthesize',
+    evaluationId,
+  });
 
   try {
     const jsonMatch = raw.match(/\{[\s\S]*\}/);

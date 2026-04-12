@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { analyzeProject } from '../analyzers';
 import { evaluateWithRole } from '../ai/qwen';
+import type { Provider } from '../ai/client';
 import { runDebateRound, runOrchestrator } from '../ai/orchestrator';
 import { runReflection } from '../ai/role-evolution';
 import type { RoleResult, LaunchContext } from '../ai/orchestrator';
@@ -168,11 +169,17 @@ interface EvaluateRequest {
   evaluationType?: EvaluationType;
   launchContext?: LaunchContext;
   rolePrompts?: Record<string, string>;
+  /**
+   * LLM provider override. If omitted, selectProvider() in ai/client.ts picks
+   * one from env vars. Setting `provider: 'claude'` is the way to opt into
+   * the prompt-caching path.
+   */
+  provider?: Provider;
 }
 
 router.post('/', async (req: Request, res: Response) => {
   try {
-    const { projectPath, projectName, roles, context, depth, mode, evaluationType, launchContext, rolePrompts } = req.body as EvaluateRequest;
+    const { projectPath, projectName, roles, context, depth, mode, evaluationType, launchContext, rolePrompts, provider } = req.body as EvaluateRequest;
 
     if (!projectPath || !projectName) {
       return res.status(400).json({ error: 'projectPath and projectName are required' });
@@ -186,7 +193,7 @@ router.post('/', async (req: Request, res: Response) => {
 
     res.json({ id: evaluationId, status: 'started', depth: selectedDepth, mode: selectedMode, evaluationType: selectedEvalType });
 
-    runEvaluation(evaluationId, projectPath, projectName, selectedRoles, context || '', selectedDepth, selectedMode, selectedEvalType, launchContext, rolePrompts).catch(console.error);
+    runEvaluation(evaluationId, projectPath, projectName, selectedRoles, context || '', selectedDepth, selectedMode, selectedEvalType, launchContext, rolePrompts, provider).catch(console.error);
   } catch (error) {
     console.error('Evaluation error:', error);
     res.status(500).json({ error: 'Failed to start evaluation' });
@@ -342,7 +349,8 @@ async function runEvaluation(
   mode: 'standard' | 'launch-ready' = 'standard',
   evaluationType: EvaluationType = 'static',
   launchContext?: LaunchContext,
-  rolePrompts?: Record<string, string>
+  rolePrompts?: Record<string, string>,
+  provider?: Provider
 ) {
   let runtimeProcess: { kill: () => Promise<void> } | undefined;
   let runtimeContext = '';
@@ -394,7 +402,17 @@ async function runEvaluation(
           fullContext = `${fullContext}${interviewContext}`;
         }
         
-        const result = await evaluateWithRole(role, analysis.summary, fullContext, depth, mode, rolePrompts?.[role], projectPath);
+        const result = await evaluateWithRole(
+          role,
+          analysis.summary,
+          fullContext,
+          depth,
+          mode,
+          rolePrompts?.[role],
+          projectPath,
+          evaluationId,
+          provider
+        );
         const { score, summary, parsed } = parseRoleResult(result);
 
         scores.push(score);
@@ -434,7 +452,7 @@ async function runEvaluation(
         // Debate round
         console.log(`[${evaluationId}] Starting debate round...`);
         emitDebating(evaluationId);
-        const debate = await runDebateRound(roleResults);
+        const debate = await runDebateRound(roleResults, evaluationId);
         saveRoleEvaluation(
           evaluationId, '_debate', 0,
           debate.summary,
@@ -446,7 +464,7 @@ async function runEvaluation(
         console.log(`[${evaluationId}] Starting orchestrator synthesis...`);
         emitOrchestrating(evaluationId);
         const orchestrated = await runOrchestrator(
-          analysis.summary, context, roleResults, debate, launchContext || {}
+          analysis.summary, context, roleResults, debate, launchContext || {}, evaluationId
         );
         const orchScore = (orchestrated.structured_json as any).overall_score || 0;
         saveRoleEvaluation(
@@ -798,7 +816,8 @@ export async function runEvaluationJob(
     config.mode,
     config.evaluationType,
     config.launchContext,
-    config.rolePrompts
+    config.rolePrompts,
+    config.provider
   );
 }
 

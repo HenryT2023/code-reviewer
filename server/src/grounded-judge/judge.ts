@@ -63,7 +63,12 @@ async function assessCoverage(
     },
   ];
 
-  const raw = await callQwen(messages, 'deepseek-chat', 4000);
+  // Judge must be deterministic so that the same evaluation always produces
+  // the same score. See CLAUDE.md "Temperature discipline".
+  const raw = await callQwen(messages, 'deepseek-chat', 4000, {
+    temperature: 0,
+    callSite: 'judge:coverage',
+  });
 
   try {
     const jsonMatch = raw.match(/\{[\s\S]*\}/);

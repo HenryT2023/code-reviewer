@@ -19,6 +19,7 @@ import mrepRouter from './routes/mrep';
 import judgeRouter from './routes/judge';
 import abTestRouter from './routes/ab-test';
 import feedbackRouter from './routes/feedback';
+import usageRouter from './routes/usage';
 import interviewAgentRouter from './interview-agent';
 import { initWebSocket } from './ws/progress';
 import { loadQueueState, startAutoSave, startScheduler, setJobExecutor } from './queue';
@@ -42,6 +43,7 @@ app.use('/api/mrep', mrepRouter);
 app.use('/api/judge', judgeRouter);
 app.use('/api/ab-test', abTestRouter);
 app.use('/api/feedback', feedbackRouter);
+app.use('/api/usage', usageRouter);
 app.use('/api/interview-agent', interviewAgentRouter);
 
 app.get('/api/health', (req, res) => {

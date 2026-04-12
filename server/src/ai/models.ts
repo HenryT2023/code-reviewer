@@ -35,7 +35,7 @@ const MODEL_CONFIGS: Record<ModelProvider, { url: string; defaultModel: string }
   },
   claude: {
     url: 'https://api.anthropic.com/v1/messages',
-    defaultModel: 'claude-3-sonnet-20240229',
+    defaultModel: 'claude-sonnet-4-6',
   },
 };
 
@@ -53,7 +53,9 @@ export function getAvailableModels(): { provider: ModelProvider; models: string[
     },
     {
       provider: 'claude',
-      models: ['claude-3-opus-20240229', 'claude-3-sonnet-20240229', 'claude-3-haiku-20240307'],
+      // Claude 4.6 family (current as of 2026). Opus is the highest quality,
+      // Sonnet is the balanced default, Haiku is the fast/cheap tier.
+      models: ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
       configured: !!process.env.ANTHROPIC_API_KEY,
     },
   ];

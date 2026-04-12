@@ -182,7 +182,13 @@ export async function runReflection(
     { role: 'user', content: buildReflectionUserMessage(roleResults, debateSummary, mrepMetrics, judgmentSummary) },
   ];
 
-  const raw = await callQwen(messages, 'deepseek-chat', 4000);
+  // Reflection uses temp 0.3 per CLAUDE.md "Temperature discipline" — we want
+  // some creative slack for surfacing blind spots, but not full 0.7 randomness.
+  const raw = await callQwen(messages, 'deepseek-chat', 4000, {
+    callSite: 'evolution:reflection',
+    evaluationId,
+    temperature: 0.3,
+  });
 
   let parsed: Partial<ReflectionResult> = {};
   try {
@@ -298,7 +304,12 @@ export async function runEvolutionSynthesis(
     { role: 'user', content: buildSynthesisUserMessage(reflections) },
   ];
 
-  const raw = await callQwen(messages, 'deepseek-chat', 8000);
+  // Synthesis also uses temp 0.3 — it's a meta-prompt generator, which wants
+  // some exploration but mostly structured reasoning. See CLAUDE.md.
+  const raw = await callQwen(messages, 'deepseek-chat', 8000, {
+    callSite: 'evolution:synthesis',
+    temperature: 0.3,
+  });
 
   let parsed: Partial<EvolutionSynthesis> = {};
   try {

@@ -191,7 +191,12 @@ export async function buildAIChecklist(techStack: string[]): Promise<ChecklistIt
     { role: 'user', content: `技术栈: ${techStack.join(', ')}\n\n请为这个技术栈生成评审清单。` },
   ];
 
-  const raw = await callQwen(messages, 'deepseek-chat', 4000);
+  // Reference checklist must be stable for a given tech stack so that judge
+  // scores are comparable across runs. See CLAUDE.md "Temperature discipline".
+  const raw = await callQwen(messages, 'deepseek-chat', 4000, {
+    temperature: 0,
+    callSite: 'judge:reference-builder',
+  });
 
   try {
     const jsonMatch = raw.match(/\[[\s\S]*\]/);
